@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../ai_intake_controller.dart';
+import '../models/ai_intake_input.dart';
 import '../models/text_correction.dart';
 import 'status_banner.dart';
 
-/// Shows the original extraction (honestly, including stub warnings) and an
-/// editable field for the reviewed text.
+/// Shows the original extraction honestly: a real success banner only for a
+/// genuine, non-empty result; a distinct warning when a real engine ran but
+/// recognized nothing; and the existing stub banner when no real engine is
+/// wired up. Wording is source-aware (audio vs. image) — never a generic
+/// "recording converted" message for an image, or vice versa.
 class ExtractionSummary extends StatelessWidget {
   const ExtractionSummary({super.key, required this.controller});
 
@@ -17,17 +21,36 @@ class ExtractionSummary extends StatelessWidget {
     return Obx(() {
       final extraction = controller.extraction.value;
       if (extraction == null) return const SizedBox.shrink();
+      final isAudio = controller.lastSourceType == AiIntakeSourceType.audio;
+      final hasText = extraction.originalText.trim().isNotEmpty;
+
+      final banners = <Widget>[];
+      if (extraction.isStub) {
+        for (final warning in extraction.warnings) {
+          banners.add(StatusBanner(kind: StatusBannerKind.stub, message: warning));
+        }
+      } else if (!hasText) {
+        banners.add(StatusBanner(
+          kind: StatusBannerKind.warning,
+          message: isAudio
+              ? 'لم يتم التعرف على أي كلام واضح في التسجيل. حاول التسجيل من جديد أو اكتب النص يدويًا.'
+              : 'لم يتم العثور على نص في الصورة. جرّب صورة أوضح أو اكتب النص يدويًا.',
+        ));
+      } else {
+        banners.add(StatusBanner(
+          kind: StatusBannerKind.real,
+          message: isAudio ? 'تم تحويل التسجيل إلى نص بنجاح.' : 'تم استخراج النص من الصورة بنجاح.',
+        ));
+        for (final warning in extraction.warnings) {
+          banners.add(StatusBanner(kind: StatusBannerKind.warning, message: warning));
+        }
+      }
+
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final warning in extraction.warnings) ...[
-            StatusBanner(
-              kind: extraction.isStub ? StatusBannerKind.stub : StatusBannerKind.real,
-              message: warning,
-            ),
-            const SizedBox(height: 8),
-          ],
-          if (!extraction.isStub) ...[
+          for (final banner in banners) ...[banner, const SizedBox(height: 8)],
+          if (!extraction.isStub && hasText) ...[
             Text('النص الأصلي المستخرج', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 4),
             SelectableText(extraction.originalText),

@@ -32,6 +32,11 @@ class ProcessingView extends StatelessWidget {
               ]),
             );
           }),
+          const SizedBox(height: 18),
+          TextButton(
+            onPressed: controller.cancelProcessing,
+            child: Text('إلغاء', style: TextStyle(color: Colors.white.withValues(alpha: .75))),
+          ),
           const Spacer(flex: 2),
         ]),
       );
@@ -53,6 +58,14 @@ class ProcessingIndicator extends StatelessWidget {
   final String label;
   @override
   Widget build(BuildContext context) => Obx(() => controller.isProcessing.value
-      ? Padding(padding: const EdgeInsets.all(16), child: Column(mainAxisSize: MainAxisSize.min, children: [LinearProgressIndicator(value: controller.processingProgress.value), const SizedBox(height: 8), Text(label)]))
+      ? Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            LinearProgressIndicator(value: controller.processingProgress.value),
+            const SizedBox(height: 8),
+            Text(label),
+            TextButton(onPressed: controller.cancelProcessing, child: const Text('إلغاء')),
+          ]),
+        )
       : const SizedBox.shrink());
 }

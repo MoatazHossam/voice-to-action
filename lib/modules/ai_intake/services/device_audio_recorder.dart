@@ -44,9 +44,15 @@ class DeviceAudioRecorder implements AudioRecorder {
       throw StateError('Microphone permission was not granted.');
     }
     final dir = await getTemporaryDirectory();
-    final path = '${dir.path}/ai_intake_${DateTime.now().microsecondsSinceEpoch}.m4a';
+    final path = '${dir.path}/ai_intake_${DateTime.now().microsecondsSinceEpoch}.wav';
     await _recorder.start(
-      const record_pkg.RecordConfig(encoder: record_pkg.AudioEncoder.aacLc),
+      // 16kHz mono PCM WAV: the format the on-device Whisper adapter needs
+      // directly, with no separate transcoding step.
+      const record_pkg.RecordConfig(
+        encoder: record_pkg.AudioEncoder.wav,
+        sampleRate: 16000,
+        numChannels: 1,
+      ),
       path: path,
     );
     _currentPath = path;

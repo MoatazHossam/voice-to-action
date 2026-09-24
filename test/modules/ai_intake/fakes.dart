@@ -80,17 +80,28 @@ class FakeAudioPlayback implements AudioPlayback {
 
 class FakeSpeechTranscriber implements SpeechTranscriber {
   TextExtraction? nextResult;
+  bool shouldThrow = false;
+  bool disposed = false;
+  Duration delay = Duration.zero;
   @override
   bool get isAvailable => false;
   @override
   Future<TextExtraction> transcribe(String audioPath, {void Function(double?)? onProgress}) async {
     onProgress?.call(null);
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    if (shouldThrow) throw StateError('fake transcription failure');
     return nextResult ?? TextExtraction.stub('stub: not implemented');
   }
+
+  @override
+  void dispose() => disposed = true;
 }
 
 class FakeImageTextExtractor implements ImageTextExtractor {
   TextExtraction? nextResult;
+  bool disposed = false;
+  @override
+  void dispose() => disposed = true;
   @override
   bool get isAvailable => false;
   @override

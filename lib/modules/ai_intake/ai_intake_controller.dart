@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:get/get.dart';
 
@@ -58,6 +59,18 @@ class AiIntakeController extends GetxController {
   StreamSubscription<Duration>? _elapsedSub;
   AiIntakeInput? _capturedInput;
   String? _lastExtractionBaseText;
+
+  /// Bumped whenever a session is reset or in-flight processing is
+  /// cancelled, so a transcribe/OCR future that finishes late (after the
+  /// user left the screen or started a new recording) can detect it is
+  /// stale and must not mutate state.
+  int _generation = 0;
+
+  /// The source type of whatever is currently under review, so the shared
+  /// review screen can show source-correct wording (recording vs. image).
+  /// Not an Rx field on purpose: it only ever changes alongside `extraction`,
+  /// which is what UI code should already be observing.
+  AiIntakeSourceType? get lastSourceType => _capturedInput?.sourceType;
 
   final Rx<AiIntakeStep> step = AiIntakeStep.voiceIdle.obs;
   final RxString errorMessage = ''.obs;
@@ -158,29 +171,58 @@ class AiIntakeController extends GetxController {
   }
 
   Future<void> discardClipAndRetry() async {
-    final path = recordedPath.value;
+    _deleteFileIfExists(recordedPath.value);
     recordedPath.value = null;
     isPlayingClip.value = false;
     amplitude.value = 0;
     elapsed.value = Duration.zero;
     step.value = AiIntakeStep.voiceIdle;
-    if (path != null) {
-      // Best-effort local cleanup; retention policy is a POC-open decision
-      // (see README_AI_INTAKE.md, "Open POC decisions").
-    }
   }
 
   Future<void> confirmClipProceedToTranscription() async {
     final input = _capturedInput;
     if (input == null) return;
+    final generation = _generation;
     step.value = AiIntakeStep.transcribing;
     isProcessing.value = true;
     processingProgress.value = null;
-    final result = await _transcriber.transcribe(
-      input.localPath,
-      onProgress: (p) => processingProgress.value = p,
-    );
-    _applyExtraction(result);
+    try {
+      final result = await _transcriber.transcribe(
+        input.localPath,
+        onProgress: (p) {
+          if (generation == _generation) processingProgress.value = p;
+        },
+      );
+      if (generation != _generation) return; // cancelled, or superseded by a new session
+      _applyExtraction(result);
+    } catch (e) {
+      if (generation != _generation) return;
+      isProcessing.value = false;
+      processingProgress.value = null;
+      errorMessage.value = 'تعذّر تحويل التسجيل إلى نص. حاول مرة أخرى.';
+      step.value = AiIntakeStep.failure;
+    }
+  }
+
+  /// Cancels an in-flight transcription/OCR call from the user's
+  /// perspective: any result it eventually produces is discarded (see
+  /// `_generation`), and the UI returns to the pre-processing preview so the
+  /// user can retry or go back. The underlying native call may still finish
+  /// in the background — this is a best-effort cancellation, not a native
+  /// interrupt, and is documented as such in ARCHITECTURE.md.
+  void cancelProcessing() {
+    if (!isProcessing.value) return;
+    _generation++;
+    isProcessing.value = false;
+    processingProgress.value = null;
+    switch (_capturedInput?.sourceType) {
+      case AiIntakeSourceType.audio:
+        step.value = AiIntakeStep.recordingPreview;
+      case AiIntakeSourceType.image:
+        step.value = AiIntakeStep.imagePreview;
+      case null:
+        step.value = AiIntakeStep.voiceIdle;
+    }
   }
 
   // ---- Image journey ----------------------------------------------------
@@ -204,14 +246,26 @@ class AiIntakeController extends GetxController {
   Future<void> confirmImageProceedToOcr() async {
     final input = _capturedInput;
     if (input == null) return;
+    final generation = _generation;
     step.value = AiIntakeStep.extractingText;
     isProcessing.value = true;
     processingProgress.value = null;
-    final result = await _imageTextExtractor.extract(
-      input.localPath,
-      onProgress: (p) => processingProgress.value = p,
-    );
-    _applyExtraction(result);
+    try {
+      final result = await _imageTextExtractor.extract(
+        input.localPath,
+        onProgress: (p) {
+          if (generation == _generation) processingProgress.value = p;
+        },
+      );
+      if (generation != _generation) return;
+      _applyExtraction(result);
+    } catch (e) {
+      if (generation != _generation) return;
+      isProcessing.value = false;
+      processingProgress.value = null;
+      errorMessage.value = 'تعذّر استخراج النص من الصورة. حاول مرة أخرى.';
+      step.value = AiIntakeStep.failure;
+    }
   }
 
   void retakeImage() {
@@ -233,8 +287,20 @@ class AiIntakeController extends GetxController {
     step.value = AiIntakeStep.review;
   }
 
+  /// Free-form edits invalidate any suggestions/corrections computed against
+  /// the previous text — otherwise a draft could carry `extractedFields`
+  /// that no longer match what the user actually approved. Toggling an
+  /// individual correction's accepted state does not go through this method
+  /// (see `setCorrectionAccepted`), so accepting a correction does not wipe
+  /// the very suggestion list currently under review.
   void updateReviewedText(String text) {
+    if (text == reviewedText.value) return;
     reviewedText.value = text;
+    if (corrections.isNotEmpty || suggestions.isNotEmpty || selectedSuggestionIds.isNotEmpty) {
+      corrections.clear();
+      suggestions.clear();
+      selectedSuggestionIds.clear();
+    }
   }
 
   /// Runs the (real, rule-based) reviewer and detector against the current
@@ -287,6 +353,8 @@ class AiIntakeController extends GetxController {
   }
 
   void _resetSession() {
+    _generation++; // invalidate any transcription/OCR still in flight from a prior session
+    _deleteFileIfExists(recordedPath.value);
     _capturedInput = null;
     recordedPath.value = null;
     imagePath.value = null;
@@ -302,12 +370,26 @@ class AiIntakeController extends GetxController {
     processingProgress.value = null;
   }
 
+  void _deleteFileIfExists(String? path) {
+    if (path == null) return;
+    try {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+    } catch (_) {
+      // Best-effort cleanup only; nothing else to do if this fails.
+    }
+  }
+
   @override
   void onClose() {
+    _generation++;
     _amplitudeSub?.cancel();
     _elapsedSub?.cancel();
+    _deleteFileIfExists(recordedPath.value);
     _recorder.dispose();
     _playback.dispose();
+    _transcriber.dispose();
+    _imageTextExtractor.dispose();
     super.onClose();
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:voice_to_action/modules/ai_intake/ai_intake_controller.dart';
 import 'package:voice_to_action/modules/ai_intake/models/action_suggestion.dart';
@@ -173,10 +175,106 @@ void main() {
     });
   });
 
-  test('onClose disposes the recorder and playback adapters', () {
-    controller.onClose();
-    // No exception implies dispose() was reachable on both fakes; a real
-    // AudioRecorder/AudioPlayback double-dispose would be a separate bug
-    // class this test does not need to simulate.
+  group('failure, cancellation, and resource cleanup', () {
+    test('a transcription exception moves to failure and clears processing state', () async {
+      transcriber.shouldThrow = true;
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+      await controller.confirmClipProceedToTranscription();
+
+      expect(controller.step.value, AiIntakeStep.failure);
+      expect(controller.isProcessing.value, isFalse);
+      expect(controller.errorMessage.value, isNotEmpty);
+    });
+
+    test('cancelProcessing discards a late transcription result and returns to preview', () async {
+      transcriber.delay = const Duration(milliseconds: 50);
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+
+      final future = controller.confirmClipProceedToTranscription();
+      // Give the future a moment to actually start awaiting inside the fake.
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      controller.cancelProcessing();
+      expect(controller.step.value, AiIntakeStep.recordingPreview);
+      expect(controller.isProcessing.value, isFalse);
+
+      await future; // let the stale transcription complete in the background
+      expect(controller.step.value, AiIntakeStep.recordingPreview,
+          reason: 'a result that arrives after cancellation must not overwrite state');
+      expect(controller.extraction.value, isNull);
+    });
+
+    test('starting a new session invalidates a still-pending transcription from the old one', () async {
+      transcriber.delay = const Duration(milliseconds: 50);
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+      final staleFuture = controller.confirmClipProceedToTranscription();
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      controller.enterVoiceFlow(); // user backs out and starts over
+
+      await staleFuture;
+      expect(controller.step.value, AiIntakeStep.voiceIdle,
+          reason: 'the stale result must not push the new session into review');
+    });
+
+    test('editing reviewed text after analysis clears suggestions and corrections', () async {
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+      transcriber.nextResult = const TextExtraction(
+        originalText: 'اجتماع غداً',
+        language: 'ar',
+        segments: [],
+        warnings: [],
+        isStub: false,
+      );
+      await controller.confirmClipProceedToTranscription();
+
+      actionDetector.nextResult = const [
+        ActionSuggestion(
+          id: 'meeting-0',
+          type: ActionType.meeting,
+          evidenceText: 'اجتماع غداً',
+          extractedFields: {'date': 'غداً'},
+          missingRequiredFields: [],
+        ),
+      ];
+      controller.analyzeReviewedText();
+      controller.toggleSuggestionSelected('meeting-0');
+      expect(controller.suggestions, isNotEmpty);
+      expect(controller.selectedSuggestionIds, isNotEmpty);
+
+      controller.updateReviewedText('نص جديد كتبه المستخدم');
+
+      expect(controller.suggestions, isEmpty);
+      expect(controller.selectedSuggestionIds, isEmpty);
+      expect(controller.corrections, isEmpty);
+    });
+
+    test('discarding a recorded clip deletes its temp file', () async {
+      final tempFile = await File(
+        '${Directory.systemTemp.path}/ai_intake_test_${DateTime.now().microsecondsSinceEpoch}.wav',
+      ).create();
+      recorder.nextStopPath = tempFile.path;
+
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+      expect(tempFile.existsSync(), isTrue);
+
+      await controller.discardClipAndRetry();
+      expect(tempFile.existsSync(), isFalse);
+    });
+
+    test('onClose disposes every native adapter, including the transcriber and OCR extractor', () {
+      controller.onClose();
+      expect(transcriber.disposed, isTrue);
+      expect(imageTextExtractor.disposed, isTrue);
+    });
   });
 }

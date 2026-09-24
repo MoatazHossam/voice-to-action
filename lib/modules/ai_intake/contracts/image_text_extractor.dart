@@ -10,4 +10,8 @@ abstract class ImageTextExtractor {
     String imagePath, {
     void Function(double? progress)? onProgress,
   });
+
+  /// Releases any loaded native model/session. Safe to call even if nothing
+  /// was ever loaded.
+  void dispose();
 }

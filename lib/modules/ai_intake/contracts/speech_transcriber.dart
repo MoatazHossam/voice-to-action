@@ -13,4 +13,9 @@ abstract class SpeechTranscriber {
     String audioPath, {
     void Function(double? progress)? onProgress,
   });
+
+  /// Releases any loaded native model/session. Safe to call even if nothing
+  /// was ever loaded (e.g. the stub implementation, or a real engine whose
+  /// model files were never found).
+  void dispose();
 }

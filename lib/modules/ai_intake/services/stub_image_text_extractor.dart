@@ -23,4 +23,7 @@ class StubImageTextExtractor implements ImageTextExtractor {
       'يمكنك كتابة النص يدويًا للمتابعة ومعاينة باقي الخطوات.',
     );
   }
+
+  @override
+  void dispose() {}
 }

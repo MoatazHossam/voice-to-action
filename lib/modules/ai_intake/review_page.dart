@@ -32,22 +32,12 @@ class ReviewPage extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-              decoration: BoxDecoration(
-                color: const Color(0xFFAAF1CE),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.check_rounded, color: Color(0xFF18754C)),
-                  SizedBox(width: 10),
-                  Text('تم تحويل التسجيل إلى نص', style: TextStyle(color: Color(0xFF176C49), fontSize: 16)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
+            // ExtractionSummary owns the honest, source-aware result banner
+            // (success / warning / stub) — no hardcoded "converted" message
+            // here, since that would be wrong for an image source, and
+            // false for a stub or failed extraction.
             ExtractionSummary(controller: controller),
+            const SizedBox(height: 12),
             Text('النص للمراجعة', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 8),
             ReviewedTextField(controller: controller),

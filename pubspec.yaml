@@ -35,6 +35,12 @@ dependencies:
   # Local, on-device temp storage for recorded clips and picked images.
   path_provider: ^2.1.4
 
+  # On-device multilingual Whisper ASR runtime (no cloud calls). See
+  # ARCHITECTURE.md "On-device Arabic speech-to-text" for model source,
+  # license, size, and setup steps — the model files are NOT bundled in
+  # this repo and must be provisioned locally via scripts/setup_whisper_arabic_model.sh.
+  sherpa_onnx: ^1.13.8
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

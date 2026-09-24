@@ -32,22 +32,37 @@ class _VoiceEntryPageState extends State<VoiceEntryPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: Obx(() {
-          final active = controller.step.value == AiIntakeStep.recording ||
-              controller.step.value == AiIntakeStep.transcribing;
-          return ColoredBox(
-            color: const Color(0xFFF7F9FE),
-            child: Column(children: [
-              if (!active) const VoiceFlowHeader(),
-              Expanded(child: _buildStep()),
-            ]),
-          );
-        }),
-      ),
-    );
+    return Obx(() {
+      final step = controller.step.value;
+      final active = step == AiIntakeStep.recording || step == AiIntakeStep.transcribing;
+      return PopScope(
+        // Leaving mid-recording or mid-transcription must stop the mic /
+        // discard the stale result, not just silently abandon the screen.
+        canPop: !active,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          final navigator = Navigator.of(context);
+          if (step == AiIntakeStep.recording) {
+            await controller.cancelRecording();
+          } else if (step == AiIntakeStep.transcribing) {
+            controller.cancelProcessing();
+          }
+          navigator.pop();
+        },
+        child: Scaffold(
+          body: SafeArea(
+            bottom: false,
+            child: ColoredBox(
+              color: const Color(0xFFF7F9FE),
+              child: Column(children: [
+                if (!active) const VoiceFlowHeader(),
+                Expanded(child: _buildStep()),
+              ]),
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   Widget _buildStep() {

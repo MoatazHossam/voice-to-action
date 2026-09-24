@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../app/app_theme.dart';
 
-enum StatusBannerKind { real, stub, unsupported, error }
+enum StatusBannerKind { real, stub, unsupported, error, warning }
 
 /// Keeps the "real vs. stub vs. unsupported vs. error" distinction visually
 /// consistent everywhere ai_intake needs to be honest about capability.
@@ -23,6 +23,7 @@ class StatusBanner extends StatelessWidget {
           'غير مدعوم'
         ),
       StatusBannerKind.error => (AppTheme.recordingRed, Icons.error_outline, 'خطأ'),
+      StatusBannerKind.warning => (AppTheme.warningAmber, Icons.info_outline, 'تنبيه'),
     };
     return Container(
       padding: const EdgeInsets.all(12),

@@ -8,17 +8,21 @@ import 'services/local_audio_playback.dart';
 import 'services/permission_service.dart';
 import 'services/rule_based_action_detector.dart';
 import 'services/rule_based_arabic_text_reviewer.dart';
+import 'services/sherpa_whisper_arabic_transcriber.dart';
 import 'services/stub_image_text_extractor.dart';
-import 'services/stub_speech_transcriber.dart';
 
 /// Wires the portable ai_intake feature to concrete on-device adapters.
 ///
 /// The only thing this binding takes from outside the module is an
 /// [ActionDraftHandler] — that is the sole seam through which a host app
 /// customizes behavior. Everything else instantiated here (recorder,
-/// playback, stub transcriber/OCR, rule-based reviewer/detector,
-/// permission/image-capture services) lives inside modules/ai_intake and
-/// has no knowledge of the demo shell.
+/// playback, real on-device Whisper transcriber, stub OCR, rule-based
+/// reviewer/detector, permission/image-capture services) lives inside
+/// modules/ai_intake and has no knowledge of the demo shell.
+///
+/// `SherpaWhisperArabicTranscriber` degrades to an honest stub extraction on
+/// its own (see that class) when the model files have not been provisioned
+/// on-device yet — this binding does not need to branch on that.
 ///
 /// To embed this feature in another app: copy modules/ai_intake, keep this
 /// binding (or replace individual services with better on-device adapters
@@ -36,7 +40,7 @@ class AiIntakeBinding extends Bindings {
       () => AiIntakeController(
         recorder: DeviceAudioRecorder(),
         playback: LocalAudioPlayback(),
-        transcriber: StubSpeechTranscriber(),
+        transcriber: SherpaWhisperArabicTranscriber(),
         imageTextExtractor: StubImageTextExtractor(),
         textReviewer: RuleBasedArabicTextReviewer(),
         actionDetector: RuleBasedActionDetector(),

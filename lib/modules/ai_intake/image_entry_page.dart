@@ -29,41 +29,59 @@ class _ImageEntryPageState extends State<ImageEntryPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('إدخال صورة')),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Obx(() {
-            switch (controller.step.value) {
-              case AiIntakeStep.permissionDenied:
-                return PermissionDeniedView(
-                  controller: controller,
-                  onRetry: () => controller.pickImage(fromCamera: true),
-                );
-              case AiIntakeStep.imagePreview:
-              case AiIntakeStep.extractingText:
-                return Column(
-                  children: [
-                    Expanded(
-                      child: ImagePreviewView(
-                        controller: controller,
-                        onContinue: () async {
-                          await controller.confirmImageProceedToOcr();
-                          if (mounted) Get.toNamed(widget.reviewRouteName);
-                        },
-                      ),
-                    ),
-                    ProcessingIndicator(controller: controller, label: 'معالجة محلية على الجهاز...'),
-                  ],
-                );
-              case AiIntakeStep.imageIdle:
-              default:
-                return ImageIdleView(controller: controller);
-            }
-          }),
+    return Obx(() {
+      final step = controller.step.value;
+      final active = step == AiIntakeStep.extractingText;
+      return PopScope(
+        // Leaving mid-OCR must discard the stale result, not just abandon
+        // the screen while the extractor keeps running in the background.
+        canPop: !active,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          controller.cancelProcessing();
+          if (mounted) Navigator.of(context).pop();
+        },
+        child: Scaffold(
+          appBar: AppBar(title: const Text('إدخال صورة')),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: _buildStep(step),
+            ),
+          ),
         ),
-      ),
-    );
+      );
+    });
+  }
+
+  Widget _buildStep(AiIntakeStep step) {
+    switch (step) {
+      case AiIntakeStep.permissionDenied:
+        return PermissionDeniedView(
+          controller: controller,
+          onRetry: () => controller.pickImage(fromCamera: true),
+        );
+      case AiIntakeStep.imagePreview:
+      case AiIntakeStep.extractingText:
+        return Column(
+          children: [
+            Expanded(
+              child: ImagePreviewView(
+                controller: controller,
+                onContinue: () async {
+                  await controller.confirmImageProceedToOcr();
+                  if (mounted) Get.toNamed(widget.reviewRouteName);
+                },
+              ),
+            ),
+            ProcessingIndicator(controller: controller, label: 'معالجة محلية على الجهاز...'),
+          ],
+        );
+      case AiIntakeStep.failure:
+        return FailureView(controller: controller, onRetry: controller.enterImageFlow);
+      case AiIntakeStep.imageIdle:
+      default:
+        return ImageIdleView(controller: controller);
+    }
   }
 }
