@@ -1,0 +1,44 @@
+name: voice_to_action
+description: "Standalone Flutter POC for a portable AI Intake control (ai_intake module) with a demo action-preview shell."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management, DI, and routing for the whole demo shell and the
+  # ai_intake feature module (binding/controller/page per module).
+  get: ^4.6.6
+
+  # Real on-device audio recording (idle -> permission -> recording state).
+  # NOTE: audio_waveforms' PlayerController must not be used as a recorder;
+  # it is a playback/visualization library only (see README_AI_INTAKE.md).
+  record: ^6.1.1
+
+  # Real local playback of a just-recorded clip (independent of the old
+  # chat AudioPlayerController; no remote download, no ChatPostModel).
+  audioplayers: ^6.1.1
+
+  # Real camera/gallery capture for the image entry flow.
+  image_picker: ^1.1.2
+
+  # Explicit mic/camera permission state before invoking capture.
+  permission_handler: ^11.3.1
+
+  # Local, on-device temp storage for recorded clips and picked images.
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
