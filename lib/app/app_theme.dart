@@ -1,13 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// Design reference: "AI Voice to Text" (Figma). The screenshot was not
-/// available in this environment, so this theme approximates the described
-/// states (idle / active / progress / result) with a calm, single-accent
-/// Material 3 palette rather than a pixel-accurate port. Replace the seed
-/// color and text styles here once the real Figma file/screenshot is
-/// accessible; nothing in modules/ai_intake depends on these exact values.
 abstract final class AppTheme {
-  static const Color _seed = Color(0xFF2F6F5E);
+  static const Color _seed = Color(0xFF0878D7);
   static const Color recordingRed = Color(0xFFD64545);
   static const Color successGreen = Color(0xFF2E9E5B);
   static const Color warningAmber = Color(0xFFB8860B);
@@ -17,7 +11,7 @@ abstract final class AppTheme {
     return ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
-      scaffoldBackgroundColor: colorScheme.surface,
+      scaffoldBackgroundColor: const Color(0xFFF7F9FE),
       appBarTheme: AppBarTheme(
         backgroundColor: colorScheme.surface,
         foregroundColor: colorScheme.onSurface,
