@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'ai_intake_controller.dart';
 import 'widgets/action_suggestions_panel.dart';
 import 'widgets/review_panel.dart';
+import 'widgets/voice_flow_header.dart';
 
 /// Shared review screen for both the voice and image journeys. Displays the
 /// original extraction, an editable final text, opt-in corrections, and
@@ -23,11 +24,29 @@ class ReviewPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = Get.find<AiIntakeController>();
     return Scaffold(
-      appBar: AppBar(title: const Text('مراجعة النص والإجراءات')),
+      appBar: const PreferredSize(
+        preferredSize: Size.fromHeight(108),
+        child: SafeArea(bottom: false, child: VoiceFlowHeader(compact: true)),
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+              decoration: BoxDecoration(
+                color: const Color(0xFFAAF1CE),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_rounded, color: Color(0xFF18754C)),
+                  SizedBox(width: 10),
+                  Text('تم تحويل التسجيل إلى نص', style: TextStyle(color: Color(0xFF176C49), fontSize: 16)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             ExtractionSummary(controller: controller),
             Text('النص للمراجعة', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 8),
