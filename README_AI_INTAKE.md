@@ -1,248 +1,213 @@
-AI Intake: voice or image to reviewed actions
+AI Intake Flutter POC
 
-This document is the implementation brief for Codex or Claude working in the existing Flutter application. Implement the feature in that repository; do not create a separate app. The screenshot supplied with this brief is the visual reference for recording, transcription, image scanning, and result screens. Figma: AI Voice to Text. If Figma is inaccessible, use the attached screenshot and report any design details that cannot be determined.
+This is a new standalone Flutter proof of concept, built to validate a reusable AI intake control. It is not part of the existing chat app or any existing request/meeting/email/task system. Build the reusable feature in its own module, then provide a small demo app around it. The feature should be portable into other Flutter projects later without copying the demo shell.
+
+Design reference: AI Voice to Text in Figma. Use the supplied screenshot if Figma is inaccessible. The screenshot depicts recording idle/active/progress/result and image selection/progress/result. Adapt the result screen to four actions.
 
 Goal
 
-An employee records Arabic speech or selects/captures an image. The app extracts editable text, proposes Arabic spelling/grammar corrections, and suggests one or more of these actions:
+Record Arabic speech or capture/select an image.
 
-New request
+Convert audio to Arabic text or run Arabic OCR on the image on the phone, where technically feasible.
 
-Meeting
+Show original text and proposed Arabic spelling/grammar corrections; let the user edit and approve changes.
 
-Email
+Detect any applicable action types: new request, meeting, email, task. One input can contain multiple actions.
 
-Task
+Create a reviewed action draft for each selected suggestion. The demo app previews these drafts; it does not submit real requests, schedule meetings, send emails, or create tasks.
 
-The employee reviews the source text, any corrections, and each suggested action before opening a prefilled draft. The app never creates a request or meeting, sends an email, or adds a task solely because AI suggested it.
+The POC must label real on-device processing and development stubs honestly. Do not show a mock as working AI.
 
-My Flutter conventions
+Frameworks and engineering conventions
 
-These are known preferences. Inspect the repository before choosing exact paths, names, dependencies, or APIs.
+Concern
 
-Flutter + GetX, using a binding, controller, and page for each module. Follow the existing project's structure and naming if it differs from the illustration below.
+Decision
 
-Use http for HTTP calls; do not introduce Dio. Keep HTTP transport and parsing outside the GetX controller. Repositories expose narrow operations to the feature.
+UI
 
-Keep the access token in the existing session/singleton mechanism. If refresh fails, use the existing global logout/error flow. Never print tokens, document URLs containing tokens, transcripts, or image contents.
+Flutter and Material, styled to the design; Arabic RTL from the first screen
 
-Where a network request is necessary, make it abortable and cancel active requests in onClose. Also stop timers, recordings, and native inference work when leaving the feature.
+State, navigation, dependency injection
 
-UI observes parsed state; it does not parse API responses inside widgets.
+GetX, with binding/controller/page for each module
 
-Arabic RTL is required. Preserve the existing theme, localization strategy, navigation, and reusable components.
+Architecture
 
-The current AudioPlayerWidget/AudioPlayerController belong to chat playback. Inspect them for reusable styling, but create a separate recording and processing flow; do not break chat playback.
+UI, state, domain models/contracts, on-device adapters, and demo action handling separated
 
-Illustrative feature layout, subject to repository inspection:
+HTTP
+
+No HTTP dependency is needed for a fully local POC. If a later adapter calls an approved internal API, use http, not Dio; keep transport/parsing out of controllers and make calls abortable
+
+Audio playback visuals
+
+audio_waveforms can inform UI if compatible, but recording must use an actual recording solution; do not treat PlayerController as a recorder
+
+Native AI
+
+Evaluate native SDKs or FFI for local inference; choose maintained, licensable dependencies after checking platform support and device cost
+
+Platforms
+
+iOS and Android phones for the POC. Document minimum OS versions, device requirements, and any platform-specific differences after implementation
+
+Tests
+
+Focus on state transitions, action/draft mapping, protected Arabic entities, and cancellation; manually verify native inference on real devices
+
+Preferred GetX conventions: business logic in the controller, transport/native engine logic in dedicated services or adapters, and parsed state exposed to the UI. Dispose native engines, subscriptions, timers, and recordings in onClose. Do not introduce a second state-management or HTTP framework.
+
+Project hierarchy
+
+Create a new Flutter project. This is the intended separation; use consistent filenames and keep the feature module independent of demo code:
 
 lib/
+  main.dart
+  app/
+    app.dart                        # GetMaterialApp, theme, localization, routes
+    app_routes.dart
+    app_theme.dart
+    app_translations.dart
+  modules/
+    home/
+      home_binding.dart
+      home_controller.dart
+      home_page.dart
+    ai_intake/                      # PORTABLE FEATURE: move this module later
+      ai_intake_binding.dart
+      ai_intake_controller.dart
+      ai_intake_page.dart
+      widgets/                      # recorder, image input, progress, review, actions
+      models/                       # extraction, correction, action suggestion, draft
+      contracts/                    # recorder, STT, OCR, reviewer, detector, host callback
+      services/                     # orchestration and platform/on-device adapters
+    action_preview/                 # DEMO ONLY: replaced by host app action forms
+      action_preview_binding.dart
+      action_preview_controller.dart
+      action_preview_page.dart
+test/
   modules/ai_intake/
-    ai_intake_binding.dart
-    ai_intake_controller.dart
-    ai_intake_page.dart
-    widgets/                 # recorder, waveform, image picker, review, action cards
-    models/                  # input, extracted text, corrections, suggested actions
-    repositories/            # orchestration and action-draft adapters
-    services/                # recording, transcription, OCR, grammar, classification
 
-Keep the actual existing placement of models, services, and repositories if the repo establishes one. Do not create parallel architectures.
+The ai_intake feature must not import home, action_preview, project-specific chat models, authentication, or app routes. Provide a host-facing callback/interface such as onActionDraft(AiActionDraft draft); the demo shell supplies an implementation that opens action_preview. In a future app, the host will instead route that draft to its real form. Keep device permissions and native plugin setup documented so migration is practical.
 
-Existing chat audio code: preserve and inspect
+Existing code supplied as reference
 
-The two source snippets shared before this brief are existing chat audio playback code, not the new voice-capture implementation. Codex must inspect their actual current versions in the repository before editing. If they are not in the repository, request the files rather than reconstructing their APIs from this summary.
+Two earlier snippets defined AudioPlayerWidget and AudioPlayerController for chat audio playback. They are design/behavior references, not files to paste into this new POC. The widget used AudioFileWaveforms, a play/pause button, duration/error labels, an optional local path, and onPlaying(ChatPostModel) to coordinate chat messages. The controller could download a remote document via AppConstants and ChatPostModel.docId, save .m4a, prepare playback, and show duration.
 
-AudioPlayerWidget current contract:
+Do not import ChatPostModel, AppConstants, token-bearing document URLs, or the old remote download logic into this POC. Do not recreate the old playback defects: a disabled button when a remote file must first download, uncancelled duplicate listeners, swallowed errors, replacing Rx observables instead of updating .value, or logging token-bearing URLs. If the new feature needs playback of a just-recorded clip, give it a small independent local playback adapter.
 
-Constructor receives an AudioPlayerController, a required ChatPostModel chatData, optional initialAudioPath, and optional onPlaying(ChatPostModel currentPlayer) callback.
-
-Displays a play/pause icon, AudioFileWaveforms linked to the controller's PlayerController, a total-duration label via CCAOLabel, and a file-error label.
-
-When given a local initial audio path, it initializes the controller path. When playback starts, it invokes onPlaying(chatData) so the parent can coordinate playback across messages.
-
-The waveform uses PlayerWaveStyle and supports the existing chat layout. Preserve the message-level UI behavior when introducing the new recording screen.
-
-AudioPlayerController current contract:
-
-Uses GetX observables for the native PlayerController, filePath, isPlayingAudio, isPlayerError, and totalDuration; also has isRecording, isShowPlayer, audioSource, and an onDone() hook. Search for external uses before removing or renaming any of these.
-
-Supports a local file path and a remote chat document identified by ChatPostModel.docId. The remote URL is generated with AppConstants.generateDocumentUrl using the existing token. A successful download is saved as a temporary .m4a; the model's isDownloaded and filePath are updated.
-
-Prepares the native player with waveform extraction, reads DurationType.max, formats the duration, pauses other players when starting, and disposes the native player in onClose.
-
-Preserve existing ChatPostModel, token/session handling, and any parent onPlaying coordination. The new AI voice feature must not replace chat playback or change existing message behavior.
-
-Known defects to check if this code is touched: the widget disables play when filePath is null, preventing the remote download path; audioSource needs to be set before a remote download; the asynchronous play toggle is not awaited before calling onPlaying; isPlayerError is reassigned to a new observable rather than updating .value; download errors are swallowed; player-state listeners are registered twice and are not cancelled explicitly; and debug printing may expose a token-bearing document URL. Fix these in a focused playback change if needed, then verify both local and remote chat audio. Do not copy these defects into the new recorder.
-
-User journeys
+Screen states and journeys
 
 Voice
 
-Tap microphone; request permission with a clear explanation.
+idle → permission → recording (timer + waveform) → stopped/preview → transcribing → text review → action draft preview
 
-Show active recording, timer, waveform, and stop/cancel controls. Bound recording duration and file size according to existing product rules; if none exist, choose documented limits.
-
-Tap Stop and convert. Show processing and allow cancellation.
-
-Present the original transcript in an editable review screen. Show grammar suggestions separately and let the user accept or reject them.
-
-Detect zero, one, or several possible actions. Show why each was suggested and flag missing details.
-
-Open the selected existing action form as a draft. User reviews and explicitly confirms through that form.
+Show explicit stop, cancel, retry, and failure states. The user can listen to the captured clip before conversion if supported. Keep conversion progress honest: use indeterminate progress when the native engine cannot report a measured percentage.
 
 Image
 
-Select from gallery or capture with camera. Determine whether inbound OS share-sheet images are already supported by the app; scope any platform work separately if not.
+idle → camera/gallery → image preview → Arabic OCR → text review → action draft preview
 
-Preview the image, then run Arabic OCR with processing/cancel/error states.
+Camera/gallery are in scope. Receiving images through another app's OS share sheet is a separate optional integration and should be reported as such. Handle image orientation, reasonable resolution limits, and multiple text blocks in reading order.
 
-Use the same text review, grammar, action suggestion, and draft steps as the voice path.
+Shared review
 
-Result screen
+Display original extraction, an editable final text, proposed corrections, action suggestions, extracted fields, and missing fields. Corrections are opt-in and can be individually accepted/rejected. Preserve names, monetary amounts, dates, emails, invoice numbers, file numbers, and IDs unless the user changes them. Allow zero, one, or multiple action suggestions. Never execute an action automatically.
 
-The reference screenshot shows task and meeting options. Extend its action area to include new request and email, while respecting narrow screen sizes. Keep the original text available after corrections; show exactly what changed. Allow direct editing. Never silently alter names, amounts, dates, file numbers, invoice identifiers, or email addresses.
+On-device processing
 
-Processing architecture
-
-Prefer processing on the phone for iOS and Android. Do not call a public AI service. Flutter provides the UI and orchestration; native code/FFI can host device inference. Inspect current packages and app platform support before selecting bridges.
+Use replaceable interfaces. Evaluate candidates against representative Arabic content on actual target phones rather than assuming package support guarantees usable quality.
 
 Operation
 
-Initial direction
+POC direction
 
-Required validation
+Important checks
 
-Recording
+Speech to text
 
-Native-backed recorder controlled by Flutter
+Multilingual local Whisper implementation is a candidate; evaluate a small model first
 
-Permission, interruption, cancellation, audio format, temporary-file lifecycle
+Egyptian/Gulf/Mixed Arabic, noisy speech, model storage, memory, heat, latency, iOS/Android integration
 
-Arabic speech to text
+Arabic OCR
 
-Evaluate a multilingual on-device Whisper implementation (whisper.cpp is a candidate); do not use an English-only model
+Arabic Tesseract model and supported native OCR are candidates
 
-Real Arabic accents, mixed Arabic/English, names, noisy clips, runtime, memory, supported devices
-
-Arabic image OCR
-
-Evaluate Arabic Tesseract models and native platform OCR where supported
-
-Printed Arabic, mixed Arabic/English, photographed documents, handwriting expectations, field order
+Printed Arabic, mixed Latin/Arabic, orientation, forms, image quality, reading order
 
 Action detection
 
-Begin with explainable local rules/structured extraction; compare a small local model if needed
+Local rules and structured extraction first; compare a small local model if needed
 
-Multi-action texts, ambiguous verbs, confidence, missing fields, false positives
+Multi-action commands, ambiguity, missing fields, false positives
 
-Arabic grammar suggestions
+Arabic grammar
 
-Evaluate a suitable local model separately; simple rule-based fixes may cover only a subset
+Research and benchmark a suitable local approach; start with narrow corrections if necessary
 
-Preserve meaning and protected entities; show suggestions rather than replacing text automatically; measure quality and latency
+Meaning preservation, dialect, entity protection, user acceptance, performance
 
-OS speech APIs are usable only after verifying offline Arabic support on each target device; do not assume an API being available means that Arabic recognition stays local. Google ML Kit Text Recognition v2 does not list Arabic script as a supported OCR script. Do not choose it as the Arabic OCR implementation without verifying a changed capability. Evaluate packages, licenses, model sizes, install/update distribution, and minimum OS/device requirements before final selection.
+The device OS speech recognizer can only be used for this offline POC after confirming that Arabic runs on-device on each supported device. Google ML Kit Text Recognition v2 must not be assumed to support Arabic OCR. If grammar correction is not reliable on supported phones, show this honestly in the POC and document an optional future on-premises service boundary. No public cloud AI calls and no silent network fallback.
 
-If on-device grammar quality or a target device is insufficient, keep a separate TextReviewService interface so an approved on-premises implementation can be integrated later. Any such fallback must be explicit to the user and must not be presented as offline. If an essential backend endpoint is missing, implement the real supported flow and a clearly marked development stub for the blocked portion; provide the needed API contract. Never claim mocked AI works.
+Portable contracts
 
-The phone may still call existing internal APIs after user confirmation to create a request, meeting, email draft/send, or task. Offline extraction does not imply offline action submission.
+Define feature-owned models and interfaces, for example:
 
-Suggested contracts
+AiIntakeInput: sourceType(audio|image), localPath, captureMetadata
+TextExtraction: originalText, language, segments, warnings
+TextCorrection: originalSpan, proposedSpan, reason, accepted
+ActionSuggestion: type(newRequest|meeting|email|task), evidenceText,
+                  extractedFields, missingRequiredFields, confidence?
+AiActionDraft: type, sourceType, originalText, reviewedText,
+               acceptedCorrections, extractedFields, unresolvedFields
 
-Choose names consistent with the repo, but retain these concepts:
+AudioRecorder / SpeechTranscriber / ImageTextExtractor /
+ArabicTextReviewer / ActionDetector / ActionDraftHandler
 
-AiInput
-  sourceType: audio | image
-  localSourcePath
-  captureMetadata
+The demo ActionDraftHandler routes to a preview showing exactly what would be passed to a host app. It must never actually send an email or modify external data. Document how a host app implements the handler and maps each of the four draft types to its existing forms.
 
-TextExtraction
-  originalText
-  sourceType
-  segments/locations, if available
-  language
-  processingWarnings
+Safety, privacy, and lifecycle
 
-TextCorrection
-  originalSpan
-  proposedSpan
-  explanation
-  accepted: bool
+Keep raw media and extracted text on-device for the POC. Do not use public AI APIs or upload input for analytics.
 
-ActionSuggestion
-  type: newRequest | meeting | email | task
-  evidenceText
-  confidence, if supported
-  extractedFields
-  missingRequiredFields
-  userSelected: bool
+Do not log transcript content, images, audio, tokens, or personal data.
 
-AiIntakeDraft
-  originalText
-  reviewedText
-  acceptedCorrections
-  suggestedActions[]
-  sourceReference (local only until submission policy is decided)
+Delete temporary media when appropriate; make retention and draft persistence explicit. Handle permission denial, silence, corrupt input, processing cancellation, missing model, and insufficient storage or memory.
 
-Define interfaces for AudioRecorder, SpeechTranscriber, ImageTextExtractor, ArabicTextReviewer, ActionDetector, and ActionDraftRouter. Implementations should be replaceable independently. Confirm that the newRequest, meeting, email, and task destinations exist before wiring navigation; reuse their existing validation and submission logic. Preserve multiple suggestions rather than forcing exactly one classification.
+Validate model provenance, licensing, download/packaging method, and update strategy. Do not fetch models from public URLs at runtime without an explicit product decision.
 
-States and failure handling
+Inference output is a suggestion. Require review before producing a draft and before any future host app executes an action.
 
-Support idle, permission denied, capturing, recorded/selected, processing, review, draft navigation, cancelled, and failed/retry states. Do not lose the original text if correction or action detection fails. Releasing the screen must stop recording, cancel/ignore in-flight work, and clean up temporary media according to app policy. Handle empty audio, silence, unsupported/corrupt images, low OCR quality, missing on-device models, insufficient memory/storage, interrupted recording, and unavailable internal APIs with clear Arabic messages.
+Work sequence for Codex or Claude
 
-Security and data handling
+Create the standalone Flutter project and establish GetX modules, Arabic RTL, theme, routes, service contracts, and an independent demo action preview. Confirm the feature module does not depend on the demo shell.
 
-Keep raw audio/images and extracted text on-device during local processing; disclose any later transfer to an internal API in the UX.
+Implement the design states and interactions for recording and image capture/selection. Use real device permission and capture flows.
 
-Do not upload source media for analytics or log it. Do not add external SDKs or model downloads from public endpoints at runtime without an explicit product decision.
+Integrate real on-device Arabic transcription and OCR; compare model options on representative phones. If a native target cannot be run in the development environment, write integration code as far as possible and report the exact verification gap.
 
-Follow the app's current retention and access policy. Document temporary-file deletion and any offline draft persistence.
+Implement local action detection, reviewed drafts, and individual correction acceptance. Evaluate Arabic grammar separately; label any experimental or stubbed part in UI and handover.
 
-AI output is untrusted input. Existing forms and backend enforce authorization and business rules. Require user confirmation before any action that writes or sends data.
-
-Implementation sequence for Codex
-
-Inspect: Read pubspec.yaml, app entry/routing, GetX bindings, theme/localization, AudioPlayerWidget, AudioPlayerController, and existing request/meeting/email/task flows. Report actual structure and existing integration points, then continue implementation.
-
-Build shared UI/state: Implement screenshot-aligned voice/image screens, review screen, action suggestion cards, models, controllers, and service contracts. Use one review flow for both input types.
-
-Make inputs real: Integrate recording and image capture/selection. Prototype real on-device Arabic transcription and OCR on representative Android/iOS devices; record model size, memory, latency, and accuracy findings. Do not substitute English-only or cloud-dependent defaults.
-
-Language/action processing: Implement local action suggestions and entity preservation, then evaluate Arabic grammar suggestions. Use a clearly identified incomplete state if model integration or quality remains unresolved.
-
-Connect drafts: Prefill existing forms, validate missing fields there, and require explicit user confirmation. Do not bypass existing repositories or create duplicate submission code.
-
-Verify: Run available Flutter analysis and focused tests; manually inspect RTL layout and native behavior on target devices. Report what was run and what could not be run.
+Verify on target devices and provide migration instructions for embedding modules/ai_intake into an existing Flutter project.
 
 Acceptance criteria
 
-A short Arabic recording can be stopped and transcribed locally on supported devices; the result can be edited. The UI clearly identifies unsupported devices/models.
+Standalone demo runs on Android and iOS with Arabic RTL and UI close to the supplied visual reference.
 
-A printed Arabic image can produce editable text locally on supported devices; uncertain text remains reviewable.
+Audio recording and image selection/capture are real. On supported pilot devices, Arabic STT and printed Arabic OCR process locally; otherwise the app shows a truthful unsupported/error state.
 
-Grammar suggestions show original and proposed text, can be accepted individually, and preserve protected identifiers unless the user edits them.
+Original and reviewed text remain visible. Corrections require approval and preserve protected identifiers.
 
-One input such as أنشئ طلب صيانة للتكييف، وحدد اجتماعاً غداً مع الفريق can suggest both a request and a meeting without creating either automatically.
+A text such as أنشئ طلب صيانة للتكييف وحدد اجتماعاً غداً مع الفريق may yield both request and meeting suggestions. Neither is executed.
 
-Each of four action types opens the correct existing form as a draft; required missing details are requested; sending/creation requires the existing confirmation flow.
+All four action types generate structured, inspectable drafts through the feature interface. The demo previews them; no real external action occurs.
 
-Cancel, retry, permissions, errors, backgrounding, and controller disposal behave predictably. No token or media content appears in logs.
+Cancellation and cleanup work; no silent external calls; clear distinction among real, experimental, unsupported, and stubbed behavior.
 
-Existing chat voice messages still play from local paths and remote docId documents; their waveform, duration, error state, and onPlaying(chatData) coordination remain functional.
+Handover specifies dependencies, minimum devices/OS, model sizes, native setup, tested Arabic samples and outcomes, and how to move the module into another app.
 
-The handover distinguishes real device functionality, stubs, backend dependencies, and untested platform/device combinations.
+Open POC decisions
 
-Decisions to resolve from the repository or with me
-
-Exact existing form/routes/API names and whether email draft creation is separate from sending.
-
-Minimum iOS/Android versions and representative low-end devices for the pilot.
-
-Whether image sharing means camera/gallery selection only or also receiving images from other apps' share sheets.
-
-Maximum audio length, image sizes, and local retention period.
-
-Whether an approved on-premises fallback is acceptable when device Arabic grammar quality is insufficient.
-
-Do the implementation work that can be done from the repo now. Ask only for a decision that blocks a specific next step; report the assumption and continue with independent tasks in the meantime.
+Determine/document maximum recording length, target devices and OS versions, printed versus handwritten image scope, acceptable Arabic dialects, whether users may retain recordings, and minimum quality thresholds. Make conservative documented POC choices where these are unspecified; ask only when a decision blocks progress.
