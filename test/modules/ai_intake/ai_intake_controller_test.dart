@@ -43,6 +43,7 @@ void main() {
       permissionGate: permissionGate,
       imageCapture: imageCapture,
       speechModelProvisioner: modelProvisioner,
+      imageModelProvisioner: FakeImageModelProvisioner(),
     );
   });
 
@@ -302,6 +303,7 @@ void main() {
         permissionGate: permissionGate,
         imageCapture: imageCapture,
         speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: FakeImageModelProvisioner(),
       );
       await recordAClip();
 
@@ -326,6 +328,7 @@ void main() {
         permissionGate: permissionGate,
         imageCapture: imageCapture,
         speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: FakeImageModelProvisioner(),
       );
       await recordAClip();
 
@@ -350,6 +353,7 @@ void main() {
         permissionGate: permissionGate,
         imageCapture: imageCapture,
         speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: FakeImageModelProvisioner(),
       );
       await recordAClip();
 
@@ -374,6 +378,7 @@ void main() {
         permissionGate: permissionGate,
         imageCapture: imageCapture,
         speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: FakeImageModelProvisioner(),
       );
       await recordAClip();
       await controller.confirmClipProceedToTranscription();
@@ -400,6 +405,7 @@ void main() {
         permissionGate: permissionGate,
         imageCapture: imageCapture,
         speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: FakeImageModelProvisioner(),
       );
       await recordAClip();
 
@@ -420,6 +426,123 @@ void main() {
     test('the provisioner is disposed when the controller closes', () {
       controller.onClose();
       expect(modelProvisioner.disposed, isTrue);
+    });
+  });
+
+  group('app-managed OCR model setup', () {
+    late FakeImageModelProvisioner imageModelProvisioner;
+
+    Future<void> pickAnImage() async {
+      imageCapture.nextGalleryResult = AiIntakeInput(
+        sourceType: AiIntakeSourceType.image,
+        localPath: '/tmp/fake.jpg',
+        capturedAt: DateTime(2026),
+      );
+      controller.enterImageFlow();
+      await controller.pickImage(fromCamera: false);
+    }
+
+    AiIntakeController buildControllerWith(FakeImageModelProvisioner provisioner) {
+      imageModelProvisioner = provisioner;
+      return AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+        imageModelProvisioner: provisioner,
+      );
+    }
+
+    test('a fresh install downloads the OCR model before extracting, then proceeds to review', () async {
+      controller = buildControllerWith(FakeImageModelProvisioner(startReady: false));
+      await pickAnImage();
+
+      await controller.confirmImageProceedToOcr();
+
+      expect(imageModelProvisioner.ensureReadyCallCount, 1);
+      expect(controller.step.value, AiIntakeStep.review);
+    });
+
+    test('an offline OCR-model download failure keeps the user on the setup screen, not review', () async {
+      controller = buildControllerWith(
+        FakeImageModelProvisioner(startReady: false)
+          ..nextEnsureReadyResult = false
+          ..nextEnsureReadyFinalStatus = ModelSetupStatus.offline,
+      );
+      await pickAnImage();
+
+      await controller.confirmImageProceedToOcr();
+
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+      expect(controller.modelSetup.value.status, ModelSetupStatus.offline);
+    });
+
+    test('retrying after an OCR-model setup failure calls ensureReady again and can succeed', () async {
+      controller = buildControllerWith(
+        FakeImageModelProvisioner(startReady: false)
+          ..nextEnsureReadyResult = false
+          ..nextEnsureReadyFinalStatus = ModelSetupStatus.failed,
+      );
+      await pickAnImage();
+      await controller.confirmImageProceedToOcr();
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+
+      imageModelProvisioner.nextEnsureReadyResult = true;
+      await controller.confirmImageProceedToOcr();
+
+      expect(imageModelProvisioner.ensureReadyCallCount, 2);
+      expect(controller.step.value, AiIntakeStep.review);
+    });
+
+    test('cancelling mid-OCR-model-download returns to the image preview, not the recording preview', () async {
+      controller = buildControllerWith(
+        FakeImageModelProvisioner(startReady: false)..delay = const Duration(milliseconds: 50),
+      );
+      await pickAnImage();
+
+      final future = controller.confirmImageProceedToOcr();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+
+      controller.cancelProcessing();
+      expect(controller.step.value, AiIntakeStep.imagePreview,
+          reason: 'cancelling the image journey\'s setup must not send the user into the voice preview');
+      expect(imageModelProvisioner.cancelled, isTrue);
+
+      await future;
+      expect(controller.step.value, AiIntakeStep.imagePreview);
+      expect(controller.extraction.value, isNull);
+    });
+
+    test('a genuine OCR recognition failure still reaches review for manual entry, honestly labeled', () async {
+      controller = buildControllerWith(FakeImageModelProvisioner());
+      imageTextExtractor.nextResult = const TextExtraction(
+        originalText: '',
+        language: 'ar',
+        segments: [],
+        warnings: ['تعذّر التعرف على النص في هذه الصورة. يمكنك كتابة النص يدويًا للمتابعة.'],
+        isStub: false,
+      );
+      await pickAnImage();
+
+      await controller.confirmImageProceedToOcr();
+
+      expect(controller.step.value, AiIntakeStep.review,
+          reason: 'an honest empty/failed extraction still reaches the editable review screen');
+      expect(controller.reviewedText.value, isEmpty);
+      expect(controller.extraction.value!.isStub, isFalse);
+    });
+
+    test('the image model provisioner is disposed when the controller closes', () {
+      controller = buildControllerWith(FakeImageModelProvisioner());
+      controller.onClose();
+      expect(imageModelProvisioner.disposed, isTrue);
     });
   });
 }

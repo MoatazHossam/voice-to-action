@@ -6,6 +6,7 @@ import 'package:voice_to_action/modules/ai_intake/contracts/arabic_text_reviewer
 import 'package:voice_to_action/modules/ai_intake/contracts/audio_playback.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/audio_recorder.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/image_capture.dart';
+import 'package:voice_to_action/modules/ai_intake/contracts/image_model_provisioner.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/image_text_extractor.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/permission_gate.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/speech_model_provisioner.dart';
@@ -151,6 +152,60 @@ class RecordingActionDraftHandler implements ActionDraftHandler {
 /// the download/retry/offline/insufficient-storage/cancellation paths.
 class FakeSpeechModelProvisioner implements SpeechModelProvisioner {
   FakeSpeechModelProvisioner({bool startReady = true})
+      : _current = startReady
+            ? const ModelSetupProgress(status: ModelSetupStatus.ready, receivedBytes: 100, totalBytes: 100)
+            : ModelSetupProgress.notStartedValue;
+
+  ModelSetupProgress _current;
+  final StreamController<ModelSetupProgress> _controller = StreamController.broadcast();
+
+  bool nextEnsureReadyResult = true;
+  ModelSetupStatus nextEnsureReadyFinalStatus = ModelSetupStatus.ready;
+  Duration delay = Duration.zero;
+  int ensureReadyCallCount = 0;
+  bool cancelled = false;
+  bool disposed = false;
+
+  @override
+  ModelSetupProgress get currentProgress => _current;
+  @override
+  Stream<ModelSetupProgress> get progressStream => _controller.stream;
+  @override
+  int get estimatedTotalBytes => 100;
+
+  @override
+  Future<bool> ensureReady() async {
+    ensureReadyCallCount++;
+    if (_current.isReady) return true;
+    _emit(const ModelSetupProgress(status: ModelSetupStatus.downloading, receivedBytes: 0, totalBytes: 100));
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    _emit(ModelSetupProgress(
+      status: nextEnsureReadyFinalStatus,
+      receivedBytes: nextEnsureReadyResult ? 100 : 50,
+      totalBytes: 100,
+    ));
+    return nextEnsureReadyResult;
+  }
+
+  void _emit(ModelSetupProgress p) {
+    _current = p;
+    if (!_controller.isClosed) _controller.add(p);
+  }
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  void dispose() {
+    disposed = true;
+    _controller.close();
+  }
+}
+
+/// Identical shape to [FakeSpeechModelProvisioner], for the image/OCR
+/// journey's independent model setup.
+class FakeImageModelProvisioner implements ImageModelProvisioner {
+  FakeImageModelProvisioner({bool startReady = true})
       : _current = startReady
             ? const ModelSetupProgress(status: ModelSetupStatus.ready, receivedBytes: 100, totalBytes: 100)
             : ModelSetupProgress.notStartedValue;

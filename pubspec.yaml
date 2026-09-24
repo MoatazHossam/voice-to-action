@@ -49,6 +49,27 @@ dependencies:
   # SHA-256 verification of downloaded model files before they're trusted.
   crypto: ^3.0.5
 
+  # On-device Arabic OCR: Tesseract 4 (LSTM) via native Tesseract4Android /
+  # SwiftyTesseract. See ARCHITECTURE.md "On-device Arabic OCR" for why
+  # Google ML Kit was ruled out (no Arabic script support) and full model
+  # provenance/license/size. Trained-data files are NOT bundled in this repo;
+  # TesseractModelProvisioner downloads, verifies, and installs them itself.
+  #
+  # Pinned to a git commit, not the pub.dev release (0.4.31): the published
+  # version's android/build.gradle still calls the defunct jcenter() and
+  # fails to build with current Gradle/AGP. That fix landed on the package's
+  # GitHub master after the last pub.dev publish — this pins the exact
+  # commit that has it, for a reproducible fresh-install build (verified in
+  # this milestone; see ARCHITECTURE.md).
+  flutter_tesseract_ocr:
+    git:
+      url: https://github.com/khjde1207/tesseract_ocr.git
+      ref: 259994d4d93d755f8d365907df0f3b174f85ff57
+
+  # Pure-Dart image decode/EXIF-orientation-correction/resize before OCR —
+  # no native dependency, no platform channel.
+  image: ^4.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -56,3 +77,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # flutter_tesseract_ocr always reads this tiny config (just the list of
+  # trained-data filenames) from the asset bundle, regardless of where the
+  # actual trained-data files come from. It is NOT the trained-data itself —
+  # those are downloaded/verified/installed at runtime by
+  # TesseractModelProvisioner, never bundled here (see ARCHITECTURE.md).
+  assets:
+    - assets/tessdata_config.json

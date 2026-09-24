@@ -7,8 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:voice_to_action/modules/ai_intake/models/model_setup_progress.dart';
-import 'package:voice_to_action/modules/ai_intake/services/whisper_model_provisioner.dart';
-import 'package:voice_to_action/modules/ai_intake/services/whisper_model_spec.dart';
+import 'package:voice_to_action/modules/ai_intake/services/tesseract_model_provisioner.dart';
+import 'package:voice_to_action/modules/ai_intake/services/tesseract_model_spec.dart';
+import 'package:voice_to_action/modules/ai_intake/services/whisper_model_spec.dart' show WhisperModelFile;
 
 Uint8List _bytesOf(String s) => Uint8List.fromList(utf8.encode(s));
 String _hashOf(Uint8List bytes) => sha256.convert(bytes).toString();
@@ -17,7 +18,7 @@ void main() {
   late Directory tempDir;
 
   setUp(() async {
-    tempDir = await Directory.systemTemp.createTemp('whisper_provisioner_test_');
+    tempDir = await Directory.systemTemp.createTemp('tesseract_provisioner_test_');
   });
 
   tearDown(() async {
@@ -50,7 +51,7 @@ void main() {
       final body = request.url.path.endsWith('a.bin') ? fileAContent : fileBContent;
       return http.Response.bytes(body, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -62,7 +63,7 @@ void main() {
     expect(provisioner.currentProgress.status, ModelSetupStatus.ready);
     expect(File('${tempDir.path}/a.bin').readAsBytesSync(), fileAContent);
     expect(File('${tempDir.path}/b.bin').readAsBytesSync(), fileBContent);
-    expect(File('${tempDir.path}/${WhisperModelSpec.manifestFileName}').existsSync(), isTrue);
+    expect(File('${tempDir.path}/${TesseractModelSpec.manifestFileName}').existsSync(), isTrue);
     provisioner.dispose();
   });
 
@@ -73,7 +74,7 @@ void main() {
       final body = request.url.path.endsWith('a.bin') ? fileAContent : fileBContent;
       return http.Response.bytes(body, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -81,7 +82,7 @@ void main() {
     expect(await provisioner.ensureReady(), isTrue);
     expect(requestCount, 2);
 
-    final secondProvisioner = WhisperModelProvisioner(
+    final secondProvisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -103,7 +104,7 @@ void main() {
       }
       return http.Response.bytes(fileBContent, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -114,7 +115,7 @@ void main() {
     expect(ready, isFalse);
     expect(provisioner.currentProgress.status, ModelSetupStatus.failed);
     expect(File('${tempDir.path}/a.bin').existsSync(), isFalse);
-    expect(File('${tempDir.path}/${WhisperModelSpec.manifestFileName}').existsSync(), isFalse);
+    expect(File('${tempDir.path}/${TesseractModelSpec.manifestFileName}').existsSync(), isFalse);
     provisioner.dispose();
   });
 
@@ -127,7 +128,7 @@ void main() {
       }
       return http.Response.bytes(fileBContent, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -142,7 +143,7 @@ void main() {
 
   test('a network failure is reported as offline, not a generic failure', () async {
     final client = MockClient((request) async => throw const SocketException('no route to host'));
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -157,7 +158,7 @@ void main() {
 
   test('an HTTP error status is a generic failure, not "offline"', () async {
     final client = MockClient((request) async => http.Response('server error', 500));
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -183,7 +184,7 @@ void main() {
       }
       return http.Response.bytes(fileBContent, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -202,7 +203,7 @@ void main() {
       final body = request.url.path.endsWith('a.bin') ? fileAContent : fileBContent;
       return http.Response.bytes(body, 200);
     });
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,
@@ -229,9 +230,9 @@ void main() {
     });
     // Force the manifest write to fail: pre-create its temp-file path AS A
     // DIRECTORY, so File.writeAsString() throws FileSystemException.
-    await Directory('${tempDir.path}/${WhisperModelSpec.manifestFileName}.tmp').create(recursive: true);
+    await Directory('${tempDir.path}/${TesseractModelSpec.manifestFileName}.tmp').create(recursive: true);
 
-    final provisioner = WhisperModelProvisioner(
+    final provisioner = TesseractModelProvisioner(
       httpClient: client,
       modelDirectoryOverride: tempDir,
       filesOverride: files,

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'ai_intake_controller.dart';
 import 'models/ai_intake_step.dart';
 import 'widgets/image_input_panel.dart';
+import 'widgets/model_setup_panel.dart';
 import 'widgets/processing_panel.dart';
 import 'widgets/recorder_panel.dart';
 
@@ -27,19 +28,33 @@ class _ImageEntryPageState extends State<ImageEntryPage> {
     controller.enterImageFlow();
   }
 
+  /// Runs the OCR pipeline (which may first have to prepare the on-device
+  /// Arabic OCR model) and only leaves this screen if it actually reached
+  /// the review step — a failure, cancellation, or a still-pending model
+  /// download must keep the user on this screen showing the appropriate
+  /// state, never silently jump to an empty review screen.
+  Future<void> _proceedToOcrThenReview() async {
+    await controller.confirmImageProceedToOcr();
+    if (mounted && controller.step.value == AiIntakeStep.review) {
+      Get.toNamed(widget.reviewRouteName);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       final step = controller.step.value;
-      final active = step == AiIntakeStep.extractingText;
+      final active = step == AiIntakeStep.extractingText || step == AiIntakeStep.preparingModel;
       return PopScope(
-        // Leaving mid-OCR must discard the stale result, not just abandon
-        // the screen while the extractor keeps running in the background.
+        // Leaving mid-OCR or mid-model-download must discard the stale
+        // result / cancel the download, not just abandon the screen while
+        // it keeps running in the background.
         canPop: !active,
         onPopInvokedWithResult: (didPop, result) async {
           if (didPop) return;
+          final navigator = Navigator.of(context);
           controller.cancelProcessing();
-          if (mounted) Navigator.of(context).pop();
+          navigator.pop();
         },
         child: Scaffold(
           appBar: AppBar(title: const Text('إدخال صورة')),
@@ -68,19 +83,17 @@ class _ImageEntryPageState extends State<ImageEntryPage> {
             Expanded(
               child: ImagePreviewView(
                 controller: controller,
-                onContinue: () async {
-                  await controller.confirmImageProceedToOcr();
-                  // Only leave this screen if processing actually reached
-                  // review — a failure or cancellation must keep the user
-                  // on the appropriate error/preview state here instead.
-                  if (mounted && controller.step.value == AiIntakeStep.review) {
-                    Get.toNamed(widget.reviewRouteName);
-                  }
-                },
+                onContinue: _proceedToOcrThenReview,
               ),
             ),
             ProcessingIndicator(controller: controller, label: 'معالجة محلية على الجهاز...'),
           ],
+        );
+      case AiIntakeStep.preparingModel:
+        return ModelSetupView(
+          controller: controller,
+          onRetry: _proceedToOcrThenReview,
+          featureLabel: 'استخراج النص من الصورة',
         );
       case AiIntakeStep.failure:
         return FailureView(controller: controller, onRetry: controller.enterImageFlow);

@@ -4,10 +4,14 @@ const voiceBlue = Color(0xFF0878D7);
 const voiceNavy = Color(0xFF062846);
 
 class VoiceFlowHeader extends StatelessWidget {
-  const VoiceFlowHeader({super.key, this.onClose, this.compact = false});
+  const VoiceFlowHeader({super.key, this.onClose, this.compact = false, this.title = 'تسجيل صوتي'});
 
   final VoidCallback? onClose;
   final bool compact;
+
+  /// Defaults to the voice-journey title; the image/OCR journey (and the
+  /// shared model-setup screen when preparing OCR) passes its own.
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +36,7 @@ class VoiceFlowHeader extends StatelessWidget {
               children: [
                 Text('الإضافة الذكية', style: TextStyle(color: Colors.white.withValues(alpha: .55), fontSize: 14, letterSpacing: 1)),
                 const SizedBox(height: 6),
-                const Text('تسجيل صوتي', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700)),
+                Text(title, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700)),
               ],
             ),
           ),

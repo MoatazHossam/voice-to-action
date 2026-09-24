@@ -9,7 +9,8 @@ import 'services/permission_service.dart';
 import 'services/rule_based_action_detector.dart';
 import 'services/rule_based_arabic_text_reviewer.dart';
 import 'services/sherpa_whisper_arabic_transcriber.dart';
-import 'services/stub_image_text_extractor.dart';
+import 'services/tesseract_arabic_ocr_extractor.dart';
+import 'services/tesseract_model_provisioner.dart';
 import 'services/whisper_model_provisioner.dart';
 
 /// Wires the portable ai_intake feature to concrete on-device adapters.
@@ -17,16 +18,16 @@ import 'services/whisper_model_provisioner.dart';
 /// The only thing this binding takes from outside the module is an
 /// [ActionDraftHandler] — that is the sole seam through which a host app
 /// customizes behavior. Everything else instantiated here (recorder,
-/// playback, real on-device Whisper transcriber, stub OCR, rule-based
-/// reviewer/detector, permission/image-capture services) lives inside
-/// modules/ai_intake and has no knowledge of the demo shell.
+/// playback, real on-device Whisper transcriber, real on-device Tesseract
+/// OCR, rule-based reviewer/detector, permission/image-capture services)
+/// lives inside modules/ai_intake and has no knowledge of the demo shell.
 ///
-/// `WhisperModelProvisioner` downloads, verifies, and installs the Arabic
-/// speech model on first use and reuses it afterward — no manual/developer
-/// setup step. `SherpaWhisperArabicTranscriber` only reads the model once
-/// it's ready; if it's somehow still missing, it degrades to an honest stub
-/// on its own (see that class) — this binding does not need to branch on
-/// either case.
+/// `WhisperModelProvisioner` / `TesseractModelProvisioner` each download,
+/// verify, and install their respective model files on first use and reuse
+/// them afterward — no manual/developer setup step for either. The
+/// transcriber/extractor only read their model once it's ready; if one is
+/// somehow still missing, it degrades to an honest stub on its own (see
+/// those classes) — this binding does not need to branch on either case.
 ///
 /// To embed this feature in another app: copy modules/ai_intake, keep this
 /// binding (or replace individual services with better on-device adapters
@@ -45,13 +46,14 @@ class AiIntakeBinding extends Bindings {
         recorder: DeviceAudioRecorder(),
         playback: LocalAudioPlayback(),
         transcriber: SherpaWhisperArabicTranscriber(),
-        imageTextExtractor: StubImageTextExtractor(),
+        imageTextExtractor: TesseractArabicOcrExtractor(),
         textReviewer: RuleBasedArabicTextReviewer(),
         actionDetector: RuleBasedActionDetector(),
         actionDraftHandler: _actionDraftHandlerFactory(),
         permissionGate: PermissionService(),
         imageCapture: ImageCaptureService(),
         speechModelProvisioner: WhisperModelProvisioner(),
+        imageModelProvisioner: TesseractModelProvisioner(),
       ),
       fenix: true,
     );

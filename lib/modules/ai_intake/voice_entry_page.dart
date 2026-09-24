@@ -93,7 +93,11 @@ class _VoiceEntryPageState extends State<VoiceEntryPage> {
           onContinue: _proceedToTranscriptionThenReview,
         );
       case AiIntakeStep.preparingModel:
-        return ModelSetupView(controller: controller, onRetry: _proceedToTranscriptionThenReview);
+        return ModelSetupView(
+          controller: controller,
+          onRetry: _proceedToTranscriptionThenReview,
+          featureLabel: 'تحويل الصوت إلى نص',
+        );
       case AiIntakeStep.transcribing:
         return ProcessingView(controller: controller);
       case AiIntakeStep.failure:

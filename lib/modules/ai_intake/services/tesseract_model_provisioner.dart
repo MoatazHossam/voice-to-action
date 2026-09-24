@@ -5,45 +5,49 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
-import '../contracts/speech_model_provisioner.dart';
+import '../contracts/image_model_provisioner.dart';
 import '../models/model_setup_progress.dart';
-import 'whisper_model_spec.dart';
+import 'tesseract_model_spec.dart';
+import 'whisper_model_spec.dart' show WhisperModelFile;
 
 enum _FileOutcome { ok, offline, insufficientStorage, failed, cancelled }
 
-/// Downloads, verifies, and installs the on-device Whisper model described
-/// by [WhisperModelSpec] the first time it's needed, then reuses it on every
-/// later launch. No developer/manual step is required — this is exactly
-/// what makes a fresh install able to transcribe Arabic speech on its own.
+/// Downloads, verifies, and installs the on-device Arabic (+ English)
+/// Tesseract trained-data files the first time OCR is needed, then reuses
+/// them on every later launch. No developer/manual step is required.
 ///
-/// Design points that matter for reliability:
-///  - Each file is downloaded to a `.part` sibling and only renamed into
-///    place after its SHA-256 matches the pinned value in [WhisperModelSpec]
-///    — a corrupt or truncated download can never be mistaken for a good one.
-///  - An interrupted download resumes from the `.part` file's current length
-///    via an HTTP `Range` request; if the server doesn't honor the range, the
-///    partial file is discarded and that one file restarts cleanly (the
-///    other, already-verified files are left alone).
-///  - Readiness after the first successful install is a single manifest
-///    read plus a cheap file-size check — no network call, no re-hashing —
-///    so normal launches pay no cost.
-///  - A `FileSystemException` that looks like "out of space" is reported as
-///    [ModelSetupStatus.insufficientStorage] rather than a generic failure.
-class WhisperModelProvisioner implements SpeechModelProvisioner {
-  WhisperModelProvisioner({
+/// This mirrors `WhisperModelProvisioner`'s design point-for-point (see that
+/// class for the full rationale): per-file `.part` staging with SHA-256
+/// verification before a rename into place, HTTP-Range resume of an
+/// interrupted download, a manifest-gated zero-network fast path on later
+/// launches, and offline/insufficient-storage/generic failure
+/// classification. The two are intentionally not merged into one shared
+/// engine in this milestone — this file exists on its own, at the cost of
+/// some duplication, so that touching OCR setup carries zero risk of
+/// regressing the already-verified speech setup (see ARCHITECTURE.md).
+///
+/// Unlike the Whisper case, **the entire attempt is wrapped in a top-level
+/// try/catch** that guarantees `ensureReady()` never throws — including a
+/// failure while writing the manifest itself. (This was a real bug found in
+/// `WhisperModelProvisioner`: an exception at that exact point used to
+/// escape uncaught, leaving the UI stuck showing "downloading 100%"
+/// forever. Both provisioners now have this fix — see
+/// `whisper_model_provisioner.dart` and ARCHITECTURE.md.)
+class TesseractModelProvisioner implements ImageModelProvisioner {
+  TesseractModelProvisioner({
     http.Client? httpClient,
     Directory? modelDirectoryOverride,
     List<WhisperModelFile>? filesOverride,
   })  : _client = httpClient ?? http.Client(),
         _modelDirectoryOverride = modelDirectoryOverride,
-        _files = filesOverride ?? WhisperModelSpec.files;
+        _files = filesOverride ?? TesseractModelSpec.files;
 
   final http.Client _client;
   final Directory? _modelDirectoryOverride;
 
-  /// Real production code always uses `WhisperModelSpec.files`. Tests inject
-  /// a couple of tiny fake files here so download/resume/integrity/manifest
-  /// logic can be verified without moving ~100MB over the network.
+  /// Real production code always uses `TesseractModelSpec.files`. Tests
+  /// inject tiny fake files so download/resume/integrity/manifest logic can
+  /// be verified without moving real trained-data over the network.
   final List<WhisperModelFile> _files;
   int get _totalBytes => _files.fold(0, (sum, f) => sum + f.sizeBytes);
 
@@ -63,9 +67,6 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
 
   @override
   Future<bool> ensureReady() {
-    // Coalesce concurrent callers (e.g. a retry tap while a prior call is
-    // still unwinding) onto the same attempt instead of racing two
-    // downloads into the same directory.
     final existing = _inFlight;
     if (existing != null) return existing;
     final attempt = _runEnsureReady();
@@ -76,16 +77,8 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
 
   Future<bool> _runEnsureReady() async {
     _cancelRequested = false;
-    // The whole attempt is wrapped in a top-level try/catch so ensureReady()
-    // can never throw — including a failure while writing the manifest
-    // itself. A prior version only guarded dir.create(); an exception from
-    // _writeManifest() (e.g. the device ran out of space on that very last
-    // write) escaped uncaught, which left the UI stuck showing "downloading
-    // 100%" forever instead of a visible retry/error state. See
-    // ARCHITECTURE.md, "Fixed: a manifest-write failure could strand the
-    // setup screen".
     try {
-      final dir = await WhisperModelSpec.resolveModelDirectory(override: _modelDirectoryOverride);
+      final dir = await TesseractModelSpec.resolveModelDirectory(override: _modelDirectoryOverride);
 
       if (await _isManifestValid(dir)) {
         _emit(ModelSetupStatus.ready, receivedBytes: _totalBytes);
@@ -114,6 +107,9 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
       _emit(ModelSetupStatus.ready, receivedBytes: _totalBytes);
       return true;
     } on FileSystemException catch (e) {
+      // Covers dir.create() and _writeManifest() failing (e.g. the device
+      // ran out of space on the very last write) — this must never escape
+      // as an uncaught exception; see class doc.
       _emit(_isOutOfSpace(e) ? ModelSetupStatus.insufficientStorage : ModelSetupStatus.failed);
       return false;
     } catch (_) {
@@ -161,8 +157,6 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
 
     final resumed = response.statusCode == 206;
     if (!resumed && startAt > 0) {
-      // Server ignored our Range header; it's sending the whole file from
-      // byte 0, so the existing partial bytes must not be kept.
       startAt = 0;
       if (await partFile.exists()) await partFile.delete();
     }
@@ -196,7 +190,7 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
     }
 
     if (!await partFile.exists() || await partFile.length() != spec.sizeBytes) {
-      return _FileOutcome.offline; // connection dropped mid-stream without throwing
+      return _FileOutcome.offline;
     }
 
     if (!await _matchesHash(partFile, spec.sha256)) {
@@ -209,7 +203,7 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
   }
 
   Future<bool> _isManifestValid(Directory dir) async {
-    final manifestFile = File('${dir.path}/${WhisperModelSpec.manifestFileName}');
+    final manifestFile = File('${dir.path}/${TesseractModelSpec.manifestFileName}');
     if (!await manifestFile.exists()) return false;
     try {
       final data = jsonDecode(await manifestFile.readAsString()) as Map<String, dynamic>;
@@ -234,7 +228,7 @@ class WhisperModelProvisioner implements SpeechModelProvisioner {
         for (final spec in _files) spec.fileName: {'sha256': spec.sha256, 'size': spec.sizeBytes},
       },
     };
-    final manifestFile = File('${dir.path}/${WhisperModelSpec.manifestFileName}');
+    final manifestFile = File('${dir.path}/${TesseractModelSpec.manifestFileName}');
     final tempFile = File('${manifestFile.path}.tmp');
     await tempFile.writeAsString(jsonEncode(data));
     await tempFile.rename(manifestFile.path);

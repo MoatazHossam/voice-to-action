@@ -9,6 +9,7 @@ import 'contracts/arabic_text_reviewer.dart';
 import 'contracts/audio_playback.dart';
 import 'contracts/audio_recorder.dart';
 import 'contracts/image_capture.dart';
+import 'contracts/image_model_provisioner.dart';
 import 'contracts/image_text_extractor.dart';
 import 'contracts/permission_gate.dart';
 import 'contracts/speech_model_provisioner.dart';
@@ -38,6 +39,7 @@ class AiIntakeController extends GetxController {
     required PermissionGate permissionGate,
     required ImageCapture imageCapture,
     required SpeechModelProvisioner speechModelProvisioner,
+    required ImageModelProvisioner imageModelProvisioner,
   })  : _recorder = recorder,
         _playback = playback,
         _transcriber = transcriber,
@@ -47,9 +49,11 @@ class AiIntakeController extends GetxController {
         _actionDraftHandler = actionDraftHandler,
         _permissionGate = permissionGate,
         _imageCapture = imageCapture,
-        _speechModelProvisioner = speechModelProvisioner {
+        _speechModelProvisioner = speechModelProvisioner,
+        _imageModelProvisioner = imageModelProvisioner {
     modelSetup.value = _speechModelProvisioner.currentProgress;
     _modelSetupSub = _speechModelProvisioner.progressStream.listen((p) => modelSetup.value = p);
+    _imageModelSetupSub = _imageModelProvisioner.progressStream.listen((p) => modelSetup.value = p);
   }
 
   final AudioRecorder _recorder;
@@ -62,11 +66,15 @@ class AiIntakeController extends GetxController {
   final PermissionGate _permissionGate;
   final ImageCapture _imageCapture;
   final SpeechModelProvisioner _speechModelProvisioner;
+  final ImageModelProvisioner _imageModelProvisioner;
   StreamSubscription<ModelSetupProgress>? _modelSetupSub;
+  StreamSubscription<ModelSetupProgress>? _imageModelSetupSub;
 
-  /// Progress of the one-time (per install), app-managed Arabic
-  /// speech-model download — see `SpeechModelProvisioner`. Rendered by
-  /// `ModelSetupView` while `step == AiIntakeStep.preparingModel`.
+  /// Progress of whichever one-time, app-managed model download is
+  /// currently relevant (Arabic speech or Arabic OCR — only one journey is
+  /// ever active per session) — see `SpeechModelProvisioner` /
+  /// `ImageModelProvisioner`. Rendered by `ModelSetupView` while
+  /// `step == AiIntakeStep.preparingModel`.
   final Rx<ModelSetupProgress> modelSetup = ModelSetupProgress.notStartedValue.obs;
 
   StreamSubscription<double>? _amplitudeSub;
@@ -243,8 +251,13 @@ class AiIntakeController extends GetxController {
   void cancelProcessing() {
     if (step.value == AiIntakeStep.preparingModel) {
       _generation++;
-      _speechModelProvisioner.cancel();
-      step.value = AiIntakeStep.recordingPreview;
+      if (_capturedInput?.sourceType == AiIntakeSourceType.image) {
+        _imageModelProvisioner.cancel();
+        step.value = AiIntakeStep.imagePreview;
+      } else {
+        _speechModelProvisioner.cancel();
+        step.value = AiIntakeStep.recordingPreview;
+      }
       return;
     }
     if (!isProcessing.value) return;
@@ -279,10 +292,23 @@ class AiIntakeController extends GetxController {
     step.value = AiIntakeStep.imagePreview;
   }
 
+  /// Fully re-entrant/idempotent, mirroring
+  /// `confirmClipProceedToTranscription`: safe to call again as a "retry"
+  /// after a failed model download or a failed extraction.
   Future<void> confirmImageProceedToOcr() async {
     final input = _capturedInput;
     if (input == null) return;
     final generation = _generation;
+
+    if (!_imageModelProvisioner.currentProgress.isReady) {
+      step.value = AiIntakeStep.preparingModel;
+      final ready = await _imageModelProvisioner.ensureReady();
+      if (generation != _generation) return;
+      modelSetup.value = _imageModelProvisioner.currentProgress;
+      if (!ready) return;
+    }
+    if (generation != _generation) return;
+
     step.value = AiIntakeStep.extractingText;
     isProcessing.value = true;
     processingProgress.value = null;
@@ -422,12 +448,14 @@ class AiIntakeController extends GetxController {
     _amplitudeSub?.cancel();
     _elapsedSub?.cancel();
     _modelSetupSub?.cancel();
+    _imageModelSetupSub?.cancel();
     _deleteFileIfExists(recordedPath.value);
     _recorder.dispose();
     _playback.dispose();
     _transcriber.dispose();
     _imageTextExtractor.dispose();
     _speechModelProvisioner.dispose();
+    _imageModelProvisioner.dispose();
     super.onClose();
   }
 }

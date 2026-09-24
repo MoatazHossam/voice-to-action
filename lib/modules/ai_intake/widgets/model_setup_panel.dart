@@ -5,22 +5,30 @@ import '../ai_intake_controller.dart';
 import '../models/model_setup_progress.dart';
 import 'voice_flow_header.dart';
 
-/// Shown while the on-device Arabic speech model is being downloaded,
-/// verified, and installed — a one-time step per install. Every string here
-/// is written for a non-technical user: no file paths, host names, script
-/// names, or other implementation detail ever appears.
+/// Shown while an on-device model (Arabic speech, or Arabic OCR) is being
+/// downloaded, verified, and installed — a one-time step per install, per
+/// feature. Every string here is written for a non-technical user: no file
+/// paths, host names, script names, or other implementation detail ever
+/// appears. [featureLabel] names what's being prepared, e.g. "تحويل الصوت
+/// إلى نص" or "استخراج النص من الصورة".
 class ModelSetupView extends StatelessWidget {
-  const ModelSetupView({super.key, required this.controller, required this.onRetry});
+  const ModelSetupView({
+    super.key,
+    required this.controller,
+    required this.onRetry,
+    required this.featureLabel,
+  });
 
   final AiIntakeController controller;
   final VoidCallback onRetry;
+  final String featureLabel;
 
   @override
   Widget build(BuildContext context) {
     return VoiceGradientBackground(
       child: Column(
         children: [
-          VoiceFlowHeader(onClose: controller.cancelProcessing),
+          VoiceFlowHeader(onClose: controller.cancelProcessing, title: featureLabel),
           const Spacer(),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -31,7 +39,7 @@ class ModelSetupView extends StatelessWidget {
                     icon: Icons.wifi_off_rounded,
                     title: 'لا يوجد اتصال بالإنترنت',
                     message:
-                        'يلزم اتصال بالإنترنت لتجهيز ميزة تحويل الصوت إلى نص لأول مرة فقط. '
+                        'يلزم اتصال بالإنترنت لتجهيز ميزة $featureLabel لأول مرة فقط. '
                         'تحقّق من الشبكة ثم أعد المحاولة.',
                     onRetry: onRetry,
                   ),
@@ -44,13 +52,13 @@ class ModelSetupView extends StatelessWidget {
                 ModelSetupStatus.failed => _ErrorBody(
                     icon: Icons.error_outline,
                     title: 'تعذّر تجهيز الميزة',
-                    message: 'حدث خطأ أثناء تجهيز تحويل الصوت إلى نص. حاول مرة أخرى.',
+                    message: 'حدث خطأ أثناء تجهيز $featureLabel. حاول مرة أخرى.',
                     onRetry: onRetry,
                   ),
                 ModelSetupStatus.downloading ||
                 ModelSetupStatus.notStarted ||
                 ModelSetupStatus.ready =>
-                  _DownloadingBody(progress: progress),
+                  _DownloadingBody(progress: progress, featureLabel: featureLabel),
               };
             }),
           ),
@@ -62,9 +70,10 @@ class ModelSetupView extends StatelessWidget {
 }
 
 class _DownloadingBody extends StatelessWidget {
-  const _DownloadingBody({required this.progress});
+  const _DownloadingBody({required this.progress, required this.featureLabel});
 
   final ModelSetupProgress progress;
+  final String featureLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -75,14 +84,14 @@ class _DownloadingBody extends StatelessWidget {
       children: [
         const Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 48),
         const SizedBox(height: 20),
-        const Text(
-          'جارٍ تجهيز تحويل الصوت إلى نص لأول مرة',
+        Text(
+          'جارٍ تجهيز $featureLabel لأول مرة',
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700),
+          style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         Text(
-          'يحدث هذا مرة واحدة فقط؛ سيعمل التعرف على الصوت بدون إنترنت بعد ذلك.',
+          'يحدث هذا مرة واحدة فقط؛ ستعمل الميزة بدون إنترنت بعد ذلك.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white.withValues(alpha: .65), fontSize: 14),
         ),

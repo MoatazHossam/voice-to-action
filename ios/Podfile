@@ -39,5 +39,17 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    # SwiftyTesseract (pulled in by flutter_tesseract_ocr) ships a
+    # precompiled binary with no arm64 simulator slice. Excluding arm64 for
+    # the simulator SDK forces the (Rosetta-emulated) x86_64 simulator slice
+    # instead, which the framework does provide, so this repo can still be
+    # verified in an Apple Silicon simulator. This does NOT affect real
+    # device builds (arm64 device is a separate, present slice) — see
+    # ARCHITECTURE.md, "On-device Arabic OCR", for detail and the actual
+    # verification gap this leaves.
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+      config.build_settings['ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+    end
   end
 end
