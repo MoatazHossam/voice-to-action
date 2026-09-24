@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Required for the one-time, in-app Arabic speech-model download
+         (WhisperModelProvisioner). Without this, a release build would have
+         no network access at all and the download would always fail. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="voice_to_action"
         android:name="${applicationName}"

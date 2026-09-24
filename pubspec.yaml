@@ -37,9 +37,17 @@ dependencies:
 
   # On-device multilingual Whisper ASR runtime (no cloud calls). See
   # ARCHITECTURE.md "On-device Arabic speech-to-text" for model source,
-  # license, size, and setup steps — the model files are NOT bundled in
-  # this repo and must be provisioned locally via scripts/setup_whisper_arabic_model.sh.
+  # license, and size. The model files are NOT bundled in this repo; the app
+  # downloads, verifies, and installs them itself on first use — see
+  # WhisperModelProvisioner — so no manual/developer step is needed.
   sherpa_onnx: ^1.13.8
+
+  # Transport for the one-time, in-app Arabic model download (per
+  # README_AI_INTAKE.md: "use http, not Dio").
+  http: ^1.2.2
+
+  # SHA-256 verification of downloaded model files before they're trusted.
+  crypto: ^3.0.5
 
 dev_dependencies:
   flutter_test:

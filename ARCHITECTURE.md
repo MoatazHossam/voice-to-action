@@ -35,11 +35,13 @@ lib/
         recorder_panel.dart         # idle/permission/recording/preview/failure views
         image_input_panel.dart      # idle/preview views
         processing_panel.dart       # honest progress + cancel (measured or indeterminate)
+        model_setup_panel.dart      # download progress / offline / storage / retry — no paths shown
         review_panel.dart           # source-aware extraction summary, editable text, corrections
         action_suggestions_panel.dart
       models/
         ai_intake_input.dart
         ai_intake_step.dart
+        model_setup_progress.dart   # download status snapshot — UI-safe, no file paths
         text_extraction.dart
         text_correction.dart
         action_suggestion.dart
@@ -48,6 +50,7 @@ lib/
         audio_recorder.dart
         audio_playback.dart
         speech_transcriber.dart
+        speech_model_provisioner.dart  # <-- the app-managed setup seam
         image_text_extractor.dart
         arabic_text_reviewer.dart
         action_detector.dart
@@ -59,6 +62,8 @@ lib/
         local_audio_playback.dart        # REAL (audioplayers package)
         image_capture_service.dart       # REAL (image_picker package)
         permission_service.dart          # REAL (permission_handler package)
+        whisper_model_spec.dart          # pinned URLs/SHA-256/sizes — single source of truth
+        whisper_model_provisioner.dart   # REAL: downloads/verifies/installs the model, no dev step
         sherpa_whisper_arabic_transcriber.dart # REAL on-device Whisper ASR (sherpa-onnx)
         stub_speech_transcriber.dart     # unused by default; kept as the honest-stub reference
         stub_image_text_extractor.dart   # STUB — labeled, not real AI (next milestone)
@@ -78,9 +83,10 @@ test/
     ai_intake_controller_test.dart
     rule_based_action_detector_test.dart
     rule_based_arabic_text_reviewer_test.dart
+    whisper_model_provisioner_test.dart  # download/resume/integrity/offline/reuse, mocked HTTP
     sherpa_whisper_arabic_transcriber_real_model_test.dart  # opt-in, needs the real model on disk
 scripts/
-  setup_whisper_arabic_model.sh   # downloads + stages the Whisper model (see below)
+  setup_whisper_arabic_model.sh   # OPTIONAL dev/test utility only — see below; end users never run this
 ```
 
 ### Deviation from the literal file list in README_AI_INTAKE.md
@@ -130,87 +136,160 @@ tests in `test/modules/ai_intake/ai_intake_controller_test.dart`:
    from `AiIntakeController.onClose()`. The recorded `.wav` is deleted on
    `discardClipAndRetry()`, and on any session reset that leaves one
    behind — it is no longer left on disk indefinitely.
+5. **Navigating to review on a failed/cancelled attempt.** `VoiceEntryPage`
+   and `ImageEntryPage` used to call `Get.toNamed(reviewRoute)`
+   unconditionally after awaiting `confirmClipProceedToTranscription()` /
+   `confirmImageProceedToOcr()` — so a failure, a cancellation, or (once
+   model setup existed) a still-downloading model would still navigate to
+   an empty/broken review screen. Both pages now check
+   `controller.step.value == AiIntakeStep.review` before navigating; on any
+   other outcome the page stays put and its own `_buildStep()` switch
+   already renders the correct state (failure, model setup, or the
+   recording/image preview it cancelled back to).
 
-## On-device Arabic speech-to-text (this milestone)
+## App-managed on-device Arabic speech-to-text
 
-`SpeechTranscriber` is now backed by a **real, on-device, multilingual**
-Whisper model via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
-(`SherpaWhisperArabicTranscriber`, `services/sherpa_whisper_arabic_transcriber.dart`).
-No cloud API is called at any point; `isAvailable`/the returned
-`TextExtraction.isStub` are computed from whether the model files are
-actually present on-device, not hardcoded.
+`SpeechTranscriber` is backed by a **real, on-device, multilingual** Whisper
+model via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+(`SherpaWhisperArabicTranscriber`). No cloud API is called at any point, and
+**no manual/developer setup step is required**: `WhisperModelProvisioner`
+downloads, verifies, and installs the model the first time it's needed, and
+`AiIntakeController` waits for that before ever calling the transcriber.
 
-**Why sherpa-onnx.** It is Apache-2.0, actively maintained (14.9k GitHub
-stars, a release the week of this session), ships prebuilt native binaries
-for iOS/Android/macOS/Linux/Windows via federated pub packages (no native
-build step required beyond a normal `flutter build`), and its Dart API is
-pure FFI — verifiable outside a full app via plain `dart run`, which is how
-this milestone first validated it (see "How this was verified" below).
+### The app-managed setup flow
 
-**Model.** `sherpa-onnx-whisper-tiny` — OpenAI's Whisper *tiny, multilingual*
-checkpoint (99 languages including Arabic; explicitly **not** the `tiny.en`
+```
+AiIntakeController.confirmClipProceedToTranscription()
+  -> if provisioner not ready: step = preparingModel, await provisioner.ensureReady()
+       -> ModelSetupView renders controller.modelSetup (downloading %, offline, storage, failed)
+       -> user can retry (re-runs ensureReady()) or cancel (PopScope / cancelProcessing())
+  -> once ready: step = transcribing, call SherpaWhisperArabicTranscriber.transcribe()
+```
+
+`WhisperModelProvisioner` (`services/whisper_model_provisioner.dart`):
+- Downloads each of the 3 model files to a `<name>.part` sibling and only
+  renames it into place after its **SHA-256 matches the pinned value** in
+  `WhisperModelSpec` — a corrupted or truncated download can never be
+  mistaken for a good one.
+- **Resumes an interrupted download**: on retry, it sends an HTTP `Range`
+  request starting from the `.part` file's current length; if the server
+  doesn't honor the range (falls back to a `200` instead of `206`), the
+  partial bytes are discarded and only *that* file restarts — files that
+  already verified successfully are left untouched.
+- **Reuses the install on every later launch** via a small manifest file
+  (`.model_manifest.json`) recording each file's pinned hash/size; a valid
+  manifest plus a matching on-disk file size is enough to report `ready`
+  with **zero network calls** — verified in this session at 1ms (see below).
+- Classifies failures instead of lumping them together: a `SocketException`/
+  timeout/connection error → `ModelSetupStatus.offline`; a `FileSystemException`
+  that looks like `ENOSPC` (or the Windows disk-full code) →
+  `insufficientStorage`; anything else (bad HTTP status, hash mismatch) →
+  `failed`. `ModelSetupView` shows a different, honest, non-technical Arabic
+  message for each.
+- Is cancellable (`cancel()`): the in-flight HTTP stream stops, already-
+  verified files are kept, and the partial file is left on disk so a later
+  attempt resumes rather than restarting.
+- Reports `estimatedTotalBytes` **before any network call** — the 3 pinned
+  file sizes are known upfront — so `ModelSetupView` can show "X of Y MB"
+  from the very first frame.
+- Never surfaces a file path, host name, or script name to the user —
+  `ModelSetupProgress` only carries a status enum and byte counts.
+
+### Model provenance
+
+`sherpa-onnx-whisper-tiny` — OpenAI's Whisper *tiny, multilingual* checkpoint
+(99 languages including Arabic; explicitly **not** the `tiny.en`
 English-only variant), converted to ONNX and int8-quantized by the
 sherpa-onnx project.
-- **Source:** `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2`
+- **Source (what the app actually downloads from):** a **pinned, immutable
+  commit** of the sherpa-onnx project's own Hugging Face mirror —
+  `https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/65176e2deb88badc814a94058666cadccc29b61c/<file>`.
+  Pinning to a commit SHA (not a mutable branch) means the bytes served at
+  each URL cannot change later. This session downloaded each of the 3 files
+  from both this Hugging Face URL and the canonical GitHub release
+  (`sherpa-onnx-whisper-tiny.tar.bz2`, tag `asr-models`) and confirmed their
+  SHA-256 hashes are byte-for-byte identical — the pinned hashes in
+  `WhisperModelSpec` are this verification, not an assumption.
 - **License:** Whisper's weights are MIT (OpenAI); the sherpa-onnx runtime
   and conversion tooling are Apache-2.0.
-- **Size:** archive ~111MB; only 3 files are needed on-device
-  (`tiny-encoder.int8.onnx` ~12MB, `tiny-decoder.int8.onnx` ~90MB,
-  `tiny-tokens.txt` ~0.8MB — the archive's fp32 `.onnx` files and
-  `test_wavs/` are discarded).
-- **Packaging:** not bundled in this repo (too large for git, and per
-  README_AI_INTAKE.md the app must not fetch models from a public URL at
-  runtime). `scripts/setup_whisper_arabic_model.sh <dir>` downloads the
-  archive, verifies its SHA-256
-  (`c46116994e539aa165266d96b325252728429c12535eb9d8b6a2b10f129e66b1`),
-  and stages the 3 needed files.
-- **Where the app expects them:** `getApplicationSupportDirectory()`
-  + `/ai_intake_whisper_tiny_ar/` (constants in
-  `SherpaWhisperArabicTranscriber`). Until they're placed there,
-  `transcribe()` returns an honest `TextExtraction.stub(...)` naming the
-  exact expected path — the app builds and runs with zero setup either way.
-- **Supported devices:** anywhere sherpa-onnx ships a prebuilt binary
-  (iOS, Android arm64/armeabi/x86/x86_64, macOS, Linux, Windows). No GPU
-  required; CPU-only int8 inference. Concretely verified only on macOS
-  desktop and the iOS *build* (see below) in this session — Android and a
-  physical iOS/Android phone are unverified.
+- **Size:** exactly 103,609,903 bytes across the 3 files this app needs
+  (`tiny-encoder.int8.onnx` 12,937,772 B, `tiny-decoder.int8.onnx`
+  89,855,401 B, `tiny-tokens.txt` 816,730 B) — the fp32 `.onnx` files and
+  `test_wavs/` bundled in the upstream release/repo are never downloaded.
+- **Where it's installed:** `getApplicationSupportDirectory()` +
+  `/ai_intake_whisper_tiny_ar/` (a constant in `WhisperModelSpec`, shared by
+  the provisioner and the transcriber so they can never disagree).
+- **Supported devices:** anywhere sherpa-onnx ships a prebuilt binary (iOS,
+  Android arm64/armeabi/x86/x86_64, macOS, Linux, Windows). No GPU required;
+  CPU-only int8 inference.
 - **Known quality limitation, stated plainly:** the *tiny* model is the
   smallest/fastest Whisper checkpoint and has materially weaker Arabic
-  accuracy than `base`/`small` (both also available from the same
-  sherpa-onnx release, same setup script pattern, larger download). This
-  POC forces `language: 'ar'` (no language auto-detection, which is
-  unreliable on `tiny`) and always surfaces a warning banner reminding the
-  user to review the text — this is not a hidden limitation.
+  accuracy than `base`/`small` (both hosted at the same Hugging Face
+  organization, same integrity-verification approach, larger download —
+  see "Optional: upgrading the model" below). This POC forces
+  `language: 'ar'` (no language auto-detection, which is unreliable on
+  `tiny`) and always surfaces a warning banner reminding the user to review
+  the text — this is not a hidden limitation.
 
-**How this was verified in this session (no physical phone available):**
-1. Downloaded the model and checksummed it; generated two **real** speech
-   recordings offline via macOS's built-in Arabic TTS voice (`say -v Majed`,
-   16kHz mono WAV) — one Arabic-only, one mixed Arabic/English — genuine
-   audio waveforms, not synthetic test doubles.
-2. Ran them through the actual sherpa-onnx Dart API via a standalone
-   `dart run` script (no Flutter engine involved) — confirmed non-empty,
-   plausible Arabic transcription:
-   - Arabic-only input "أنشئ طلب صيانة للتكييف وحدد اجتماعاً غداً مع الفريق" → recognized "ان شعطلب سيانة لتكيف وحد دجتماعا غداً مع الفريق"
-   - Mixed input "من فضلك أرسل إيميل إلى الفريق بخصوص meeting schedule يوم الاثنين" → recognized "من فضلك عرسلة عيميل للالفريق بخصوص ميطن صدبو اليوم للثنين" (the English phrase came out as Arabic-script phonetic approximations — the `tiny` model's typical code-switching behavior when the language is forced to Arabic, not empty and not fabricated)
-3. Built this Flutter app for the iOS simulator (`flutter build ios --simulator`) — confirms sherpa-onnx's iOS binaries link correctly; did not run inference on the simulator since it has no real microphone input.
-4. Built and ran the actual compiled **macOS app** (`flutter run -d macos`), placed the model files at the exact on-device path `SherpaWhisperArabicTranscriber` resolves via `path_provider`, and called `transcribe()` on the same two WAV files through the real adapter class end-to-end — reproduced the same non-empty output as step 2, confirming the app-level integration (path resolution, sandboxed file access, plugin initialization) works, not just the underlying library.
-5. `flutter test` on macOS could **not** run this (its lightweight `flutter_tester` host resolves a stale/incompatible native sherpa-onnx binary — a known limitation of that host for FFI desktop plugins, unrelated to this adapter's logic); the opt-in test
-   `test/modules/ai_intake/sherpa_whisper_arabic_transcriber_real_model_test.dart`
-   exists for reproducibility but must be run via `flutter run -d macos` (as
-   in step 4) or on a real device, documented in the test file's header.
+### How this was verified in this session (no physical phone available)
 
-**Reproducing this setup:**
-```bash
-bash scripts/setup_whisper_arabic_model.sh /tmp/whisper-ar
-# macOS desktop debug build (bundle id com.example.voiceToAction):
-DEST="$HOME/Library/Containers/com.example.voiceToAction/Data/Library/Application Support/com.example.voiceToAction/ai_intake_whisper_tiny_ar"
-mkdir -p "$DEST" && cp /tmp/whisper-ar/ai_intake_whisper_tiny_ar/* "$DEST/"
-# iOS/Android: push the same 3 files into the app's application-support
-# directory on-device (e.g. via Xcode's Devices window file sharing, or
-# `adb push ... /data/data/<pkg>/app_flutter/ai_intake_whisper_tiny_ar/`
-# for a debuggable Android build) — not verified on real hardware this
-# session; report this gap rather than assuming it works.
-```
+**The app-managed download/install/reuse pipeline was verified for real,
+with no manual file copying performed by the operator:**
+1. Cleared any previously-installed model from the macOS app's on-device
+   storage to guarantee a genuinely fresh-install state.
+2. Ran the actual compiled macOS app (`flutter run -d macos`) with a
+   temporary diagnostic entrypoint that called
+   `WhisperModelProvisioner()` — the real class, real `WhisperModelSpec`,
+   real Hugging Face URLs, no test overrides — and watched it:
+   - Report `estimatedTotalBytes = 103,609,903` before any network activity.
+   - Stream real download progress from an empty directory to 100%.
+   - Complete in ~16.7s: `FIRST ensureReady() => true (status=ready)`.
+   - On an immediate second call: `SECOND ensureReady() => true in 1ms` —
+     confirmed zero network activity, reused from the manifest on disk.
+   - Inspected the installed directory afterward: all 3 files present with
+     the exact pinned sizes, no leftover `.part` files, and a manifest
+     whose recorded hashes match `WhisperModelSpec` exactly.
+3. Immediately after (same run), constructed a fresh
+   `SherpaWhisperArabicTranscriber()` (no overrides) and fed it the same two
+   genuine Arabic/mixed-language WAV recordings used in earlier
+   verification (macOS `say -v Majed` TTS, 16kHz mono) — both transcribed
+   to real, non-empty, non-fabricated text, identical to prior runs:
+   - "أنشئ طلب صيانة للتكييف وحدد اجتماعاً غداً مع الفريق" → "ان شعطلب سيانة لتكيف وحد دجتماعا غداً مع الفريق"
+   - "من فضلك أرسل إيميل إلى الفريق بخصوص meeting schedule يوم الاثنين" → "من فضلك عرسلة عيميل للالفريق بخصوص ميطن صدبو اليوم للثنين"
+4. A macOS-specific note, not an iOS/Android concern: this required adding
+   `com.apple.security.network.client` to `macos/Runner/DebugProfile.entitlements`
+   — the macOS debug build's App Sandbox blocks all outbound network
+   calls without it. iOS and Android apps have no equivalent restriction
+   (Android instead needs the `INTERNET` manifest permission, which this
+   milestone added to `android/app/src/main/AndroidManifest.xml` — it was
+   present only in the debug/profile manifests before, meaning a **release**
+   Android build would have had no network access at all).
+5. Built this app for the **iOS simulator** (`flutter build ios --simulator`)
+   — confirms sherpa-onnx's and `http`'s iOS binaries link correctly.
+   **Not verified this session:** driving the simulator's UI (tap record,
+   grant the mic permission dialog, speak) — no UI-automation tool (idb/
+   Maestro/Appium) is available in this environment, and the simulator's
+   mic passthrough was not exercised. So: the download/install/transcribe
+   *pipeline* is verified end-to-end through a real compiled app; a live,
+   finger-tap-driven recording on an iOS/Android device is not.
+6. `flutter test` on macOS still cannot run `sherpa_onnx` directly (its
+   lightweight `flutter_tester` host resolves an incompatible native
+   binary — unrelated to this milestone's code, same limitation noted
+   previously); `WhisperModelProvisioner`'s own logic is instead covered by
+   `test/modules/ai_intake/whisper_model_provisioner_test.dart` using a
+   mocked `http.Client` (no network, no real model needed) exercising
+   download/resume/integrity-failure/retry/offline/reuse paths directly —
+   these *do* run under plain `flutter test`.
+
+### Optional: engine-level manual testing (not needed for normal use)
+
+`scripts/setup_whisper_arabic_model.sh` still exists for one purpose only:
+letting a developer stage the model into an arbitrary local directory to
+exercise `sherpa_whisper_arabic_transcriber_real_model_test.dart` (a lower-
+level test of the transcriber's decode correctness in isolation from the
+provisioner). It is **not** part of the app's runtime path and an end user
+never needs it — a real install downloads the model itself, as verified
+above.
 
 ## Dependency direction
 
@@ -248,10 +327,13 @@ or submits a request.
 1. Copy `lib/modules/ai_intake/` into the host project unchanged.
 2. Add its dependencies to the host's `pubspec.yaml`: `get`, `record`,
    `audioplayers`, `image_picker`, `permission_handler`, `path_provider`,
-   `sherpa_onnx`.
+   `sherpa_onnx`, `http`, `crypto`.
 3. Add the iOS `Info.plist` keys (`NSMicrophoneUsageDescription`,
-   `NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`) and the
-   Android manifest permissions (`RECORD_AUDIO`, `CAMERA`) — see below.
+   `NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`), the
+   Android manifest permissions (`RECORD_AUDIO`, `CAMERA`, `INTERNET`) — see
+   below — and, only if also targeting macOS,
+   `com.apple.security.network.client` in that platform's entitlements
+   (iOS/Android need no equivalent).
 4. Implement `ActionDraftHandler` once, mapping `AiActionDraft.type` to the
    host's real forms:
    - `ActionType.newRequest` → the host's request-creation form, pre-filled
@@ -268,11 +350,10 @@ or submits a request.
 5. Register `AiIntakeBinding(actionDraftHandler: () => YourHandler())` on
    whatever routes push `VoiceEntryPage` / `ImageEntryPage` / `ReviewPage`
    (see `app/app_routes.dart` for the exact wiring pattern to copy).
-6. Run `scripts/setup_whisper_arabic_model.sh` and provision the model files
-   on the target device (see "On-device Arabic speech-to-text" below) if
-   real STT is wanted; otherwise `SherpaWhisperArabicTranscriber` degrades
-   to an honest stub on its own. Decide whether to keep
-   `StubImageTextExtractor` / `RuleBasedArabicTextReviewer` /
+6. Nothing else for STT — `WhisperModelProvisioner` downloads, verifies, and
+   installs the model itself on first use (see "App-managed on-device
+   Arabic speech-to-text" below); there is no setup step to run. Decide
+   whether to keep `StubImageTextExtractor` / `RuleBasedArabicTextReviewer` /
    `RuleBasedActionDetector`, or swap in better implementations behind the
    same contracts — nothing else in the module needs to change either way.
 
@@ -286,7 +367,7 @@ machine, and its own on-device adapters.
 | Audio recording | **Real** | `record` package, actual mic capture, real permission flow, real amplitude/duration streams |
 | Local clip playback | **Real** | `audioplayers`, plays the just-recorded file only — no relation to the old chat player |
 | Camera/gallery capture | **Real** | `image_picker`, real permission flow, resolution capped at 2000px |
-| Arabic speech-to-text | **Real, on-device** | Whisper tiny (multilingual) via sherpa-onnx, no cloud call; falls back to an honest stub if the model files aren't provisioned on-device — see above |
+| Arabic speech-to-text | **Real, on-device, app-managed setup** | Whisper tiny (multilingual) via sherpa-onnx; `WhisperModelProvisioner` downloads/verifies/installs the model on first use, no cloud call at inference, no manual step; falls back to an honest stub only if setup was skipped entirely |
 | Arabic OCR | **Stub** (next milestone) | Explicitly labeled; returns `TextExtraction.stub(...)`, never invented text |
 | Arabic text normalization | **Real, narrow** | Tatweel removal + whitespace collapse only, with protected-entity detection (emails/amounts/dates/IDs). Not a grammar/spelling model. |
 | Action detection | **Real, rule-based** | Arabic keyword/pattern matching for the four types, field extraction via simple regex/context windows. Not ML; `confidence` is always `null`. |
@@ -294,13 +375,13 @@ machine, and its own on-device adapters.
 
 ## What another project must still supply to get real AI
 
-- **STT is done for this milestone**, but a production host should still
-  decide: `tiny` vs. `base`/`small` (accuracy/size trade-off, same setup
-  script pattern), and how the 3 model files actually get onto a real
-  device at install time (this POC only documents/manually verifies macOS;
-  a production app needs a real asset-bundling or first-run-download-with-
-  consent strategy — deliberately not decided here, see README_AI_INTAKE.md
-  "Open POC decisions").
+- **STT setup is fully app-managed for this milestone**, but a production
+  host should still decide: `tiny` vs. `base`/`small` (accuracy/size
+  trade-off — swap the 3 URLs/hashes/sizes in `WhisperModelSpec`, same
+  provisioner code), whether to ask the user's consent before a ~100MB
+  cellular download (this POC downloads unconditionally on first need —
+  see README_AI_INTAKE.md "Open POC decisions"), and whether Wi-Fi-only
+  download is required for a production release.
 - An on-device Arabic OCR engine behind `ImageTextExtractor` — next
   milestone. Evaluate Arabic Tesseract or a vetted native OCR SDK; do not
   assume ML Kit v2 supports Arabic.
@@ -316,7 +397,10 @@ machine, and its own on-device adapters.
   target should be checked against that if raised in a future milestone.
 - Android: `minSdkVersion` is left at Flutter's default (currently 23+ for
   this Flutter version); `record`/`image_picker`/`permission_handler` are
-  compatible with that floor.
+  compatible with that floor. `android/app/src/main/AndroidManifest.xml`
+  now declares `INTERNET` (needed for the one-time model download; it was
+  previously only in the debug/profile manifests Flutter adds for its own
+  tooling, which are not part of a release build).
 - These are plugin-constraint-derived, conservative statements, not
   measurements from a physical device — real-device verification is next
   milestone's job, per README_AI_INTAKE.md's own phasing.
@@ -337,3 +421,14 @@ machine, and its own on-device adapters.
   than silently assumed away.
 - Multi-block OCR reading order, handwriting, and OS share-sheet image
   ingestion are all out of scope, as called out in README_AI_INTAKE.md.
+- The ~103MB model download happens unconditionally on first need, on
+  whatever network is available (no Wi-Fi-only gate, no user consent
+  prompt before spending cellular data) — a deliberate POC simplification,
+  flagged above under "What another project must still supply."
+- `macos/Runner/DebugProfile.entitlements` now includes
+  `com.apple.security.network.client`, added solely so this session could
+  verify the download flow through a real compiled app on this development
+  machine. macOS is not a target platform for this app (README_AI_INTAKE.md
+  scopes this POC to iOS/Android phones); the change is harmless and
+  debug-only, kept because it makes the same verification reproducible
+  later without rediscovering the App Sandbox restriction.

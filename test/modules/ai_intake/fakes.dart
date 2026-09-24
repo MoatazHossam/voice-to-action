@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:voice_to_action/modules/ai_intake/contracts/action_detector.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/action_draft_handler.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/arabic_text_reviewer.dart';
@@ -6,10 +8,12 @@ import 'package:voice_to_action/modules/ai_intake/contracts/audio_recorder.dart'
 import 'package:voice_to_action/modules/ai_intake/contracts/image_capture.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/image_text_extractor.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/permission_gate.dart';
+import 'package:voice_to_action/modules/ai_intake/contracts/speech_model_provisioner.dart';
 import 'package:voice_to_action/modules/ai_intake/contracts/speech_transcriber.dart';
 import 'package:voice_to_action/modules/ai_intake/models/action_suggestion.dart';
 import 'package:voice_to_action/modules/ai_intake/models/ai_action_draft.dart';
 import 'package:voice_to_action/modules/ai_intake/models/ai_intake_input.dart';
+import 'package:voice_to_action/modules/ai_intake/models/model_setup_progress.dart';
 import 'package:voice_to_action/modules/ai_intake/models/text_correction.dart';
 import 'package:voice_to_action/modules/ai_intake/models/text_extraction.dart';
 
@@ -139,4 +143,60 @@ class RecordingActionDraftHandler implements ActionDraftHandler {
   final List<AiActionDraft> receivedDrafts = [];
   @override
   void onActionDraft(AiActionDraft draft) => receivedDrafts.add(draft);
+}
+
+/// Defaults to already-ready (matching a normal, already-set-up device) so
+/// tests that don't care about model setup are unaffected. Configure
+/// [nextEnsureReadyResult]/[nextEnsureReadyFinalStatus]/[delay] to exercise
+/// the download/retry/offline/insufficient-storage/cancellation paths.
+class FakeSpeechModelProvisioner implements SpeechModelProvisioner {
+  FakeSpeechModelProvisioner({bool startReady = true})
+      : _current = startReady
+            ? const ModelSetupProgress(status: ModelSetupStatus.ready, receivedBytes: 100, totalBytes: 100)
+            : ModelSetupProgress.notStartedValue;
+
+  ModelSetupProgress _current;
+  final StreamController<ModelSetupProgress> _controller = StreamController.broadcast();
+
+  bool nextEnsureReadyResult = true;
+  ModelSetupStatus nextEnsureReadyFinalStatus = ModelSetupStatus.ready;
+  Duration delay = Duration.zero;
+  int ensureReadyCallCount = 0;
+  bool cancelled = false;
+  bool disposed = false;
+
+  @override
+  ModelSetupProgress get currentProgress => _current;
+  @override
+  Stream<ModelSetupProgress> get progressStream => _controller.stream;
+  @override
+  int get estimatedTotalBytes => 100;
+
+  @override
+  Future<bool> ensureReady() async {
+    ensureReadyCallCount++;
+    if (_current.isReady) return true;
+    _emit(const ModelSetupProgress(status: ModelSetupStatus.downloading, receivedBytes: 0, totalBytes: 100));
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    _emit(ModelSetupProgress(
+      status: nextEnsureReadyFinalStatus,
+      receivedBytes: nextEnsureReadyResult ? 100 : 50,
+      totalBytes: 100,
+    ));
+    return nextEnsureReadyResult;
+  }
+
+  void _emit(ModelSetupProgress p) {
+    _current = p;
+    if (!_controller.isClosed) _controller.add(p);
+  }
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  void dispose() {
+    disposed = true;
+    _controller.close();
+  }
 }

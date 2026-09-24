@@ -1,23 +1,27 @@
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import '../contracts/speech_transcriber.dart';
 import '../models/text_extraction.dart';
+import 'whisper_model_spec.dart';
 
 /// Real, on-device, multilingual Arabic speech-to-text using a Whisper
 /// model (tiny, multilingual — NOT the `.en` English-only variant) via the
 /// sherpa-onnx runtime (Apache-2.0, ONNX Runtime, no network access at
 /// inference time). See ARCHITECTURE.md, "On-device Arabic speech-to-text",
-/// for the model's source, license, size, and exact setup steps — the model
-/// files are never fetched by this app at runtime; they must already be
-/// present on-device (via `scripts/setup_whisper_arabic_model.sh`) before
-/// `isAvailable` becomes true.
+/// for the model's source, license, and size.
 ///
-/// If the model files are missing, `transcribe` returns an honest
-/// [TextExtraction.stub] — it never fabricates a transcript. A genuine
-/// engine failure (a corrupt file, an unsupported architecture) is
+/// This class does not download anything itself — `AiIntakeController` asks
+/// a `SpeechModelProvisioner` to make the model ready *before* calling
+/// `transcribe`, so a fresh install never reaches this class without the
+/// model already in place. The file-presence check here is only a defensive
+/// fallback (e.g. a caller that skipped provisioning): if the files are
+/// somehow still missing, `transcribe` returns an honest
+/// [TextExtraction.stub] with a plain, non-technical message — never a file
+/// path, script name, or fabricated transcript.
+///
+/// A genuine engine failure (a corrupt file, an unsupported architecture) is
 /// rethrown so `AiIntakeController` can show its real failure/retry state
 /// instead of silently reporting an empty "success".
 class SherpaWhisperArabicTranscriber implements SpeechTranscriber {
@@ -35,27 +39,18 @@ class SherpaWhisperArabicTranscriber implements SpeechTranscriber {
   /// real on-device application-support directory.
   final Directory? _modelDirectoryOverride;
 
-  static const String _modelDirName = 'ai_intake_whisper_tiny_ar';
-  static const String _encoderFile = 'tiny-encoder.int8.onnx';
-  static const String _decoderFile = 'tiny-decoder.int8.onnx';
-  static const String _tokensFile = 'tiny-tokens.txt';
-
   bool _available = false;
   sherpa_onnx.OfflineRecognizer? _recognizer;
 
   @override
   bool get isAvailable => _available;
 
-  Future<Directory> _modelDirectory() async {
-    final override = _modelDirectoryOverride;
-    if (override != null) return override;
-    final base = await getApplicationSupportDirectory();
-    return Directory('${base.path}/$_modelDirName');
-  }
+  Future<Directory> _modelDirectory() =>
+      WhisperModelSpec.resolveModelDirectory(override: _modelDirectoryOverride);
 
   Future<bool> _filesPresent(Directory dir) async {
-    for (final name in [_encoderFile, _decoderFile, _tokensFile]) {
-      if (!await File('${dir.path}/$name').exists()) return false;
+    for (final file in WhisperModelSpec.files) {
+      if (!await File('${dir.path}/${file.fileName}').exists()) return false;
     }
     return true;
   }
@@ -66,14 +61,14 @@ class SherpaWhisperArabicTranscriber implements SpeechTranscriber {
 
     await sherpa_onnx.initBindingsAsync();
     final whisper = sherpa_onnx.OfflineWhisperModelConfig(
-      encoder: '${dir.path}/$_encoderFile',
-      decoder: '${dir.path}/$_decoderFile',
+      encoder: '${dir.path}/${WhisperModelSpec.encoderFileName}',
+      decoder: '${dir.path}/${WhisperModelSpec.decoderFileName}',
       language: language,
       task: 'transcribe',
     );
     final modelConfig = sherpa_onnx.OfflineModelConfig(
       whisper: whisper,
-      tokens: '${dir.path}/$_tokensFile',
+      tokens: '${dir.path}/${WhisperModelSpec.tokensFileName}',
       modelType: 'whisper',
       debug: false,
       numThreads: 1,
@@ -95,10 +90,9 @@ class SherpaWhisperArabicTranscriber implements SpeechTranscriber {
     _available = await _filesPresent(dir);
 
     if (!_available) {
+      // Defensive fallback only — see class doc. No path, no script name.
       return TextExtraction.stub(
-        'لم يتم العثور على ملفات نموذج Whisper العربي على الجهاز '
-        '(المسار المتوقع: ${dir.path}). '
-        'راجع scripts/setup_whisper_arabic_model.sh وARCHITECTURE.md لتنزيل النموذج وتثبيته محليًا مرة واحدة.',
+        'تعذّر تجهيز ميزة تحويل الصوت إلى نص. حاول مرة أخرى.',
       );
     }
 
@@ -119,7 +113,7 @@ class SherpaWhisperArabicTranscriber implements SpeechTranscriber {
         language: language,
         segments: text.isEmpty ? const [] : [TextSegment(text: text, order: 0)],
         warnings: const [
-          'نموذج Whisper الصغير متعدد اللغات — دقة التعرف على اللهجات العربية محدودة؛ راجع النص قبل الاعتماد عليه.',
+          'نموذج التعرف على الصوت مضغوط وسريع، وقد تقل دقّته مع اللهجات العربية؛ راجع النص قبل الاعتماد عليه.',
         ],
         isStub: false,
       );

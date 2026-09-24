@@ -5,6 +5,7 @@ import 'package:voice_to_action/modules/ai_intake/ai_intake_controller.dart';
 import 'package:voice_to_action/modules/ai_intake/models/action_suggestion.dart';
 import 'package:voice_to_action/modules/ai_intake/models/ai_intake_input.dart';
 import 'package:voice_to_action/modules/ai_intake/models/ai_intake_step.dart';
+import 'package:voice_to_action/modules/ai_intake/models/model_setup_progress.dart';
 import 'package:voice_to_action/modules/ai_intake/models/text_extraction.dart';
 
 import 'fakes.dart';
@@ -18,6 +19,7 @@ void main() {
   late FakeImageCapture imageCapture;
   late FakeActionDetector actionDetector;
   late RecordingActionDraftHandler draftHandler;
+  late FakeSpeechModelProvisioner modelProvisioner;
   late AiIntakeController controller;
 
   setUp(() {
@@ -29,6 +31,7 @@ void main() {
     imageCapture = FakeImageCapture();
     actionDetector = FakeActionDetector();
     draftHandler = RecordingActionDraftHandler();
+    modelProvisioner = FakeSpeechModelProvisioner(); // ready by default
     controller = AiIntakeController(
       recorder: recorder,
       playback: playback,
@@ -39,6 +42,7 @@ void main() {
       actionDraftHandler: draftHandler,
       permissionGate: permissionGate,
       imageCapture: imageCapture,
+      speechModelProvisioner: modelProvisioner,
     );
   });
 
@@ -275,6 +279,147 @@ void main() {
       controller.onClose();
       expect(transcriber.disposed, isTrue);
       expect(imageTextExtractor.disposed, isTrue);
+    });
+  });
+
+  group('app-managed speech model setup', () {
+    Future<void> recordAClip() async {
+      controller.enterVoiceFlow();
+      await controller.beginRecording();
+      await controller.stopRecording();
+    }
+
+    test('a fresh install downloads the model before transcribing, then proceeds to review', () async {
+      modelProvisioner = FakeSpeechModelProvisioner(startReady: false);
+      controller = AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+      );
+      await recordAClip();
+
+      await controller.confirmClipProceedToTranscription();
+
+      expect(modelProvisioner.ensureReadyCallCount, 1);
+      expect(controller.step.value, AiIntakeStep.review);
+    });
+
+    test('an offline download failure keeps the user on the model-setup screen, not review', () async {
+      modelProvisioner = FakeSpeechModelProvisioner(startReady: false)
+        ..nextEnsureReadyResult = false
+        ..nextEnsureReadyFinalStatus = ModelSetupStatus.offline;
+      controller = AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+      );
+      await recordAClip();
+
+      await controller.confirmClipProceedToTranscription();
+
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+      expect(controller.modelSetup.value.status, ModelSetupStatus.offline);
+    });
+
+    test('an insufficient-storage failure is reported distinctly from a generic failure', () async {
+      modelProvisioner = FakeSpeechModelProvisioner(startReady: false)
+        ..nextEnsureReadyResult = false
+        ..nextEnsureReadyFinalStatus = ModelSetupStatus.insufficientStorage;
+      controller = AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+      );
+      await recordAClip();
+
+      await controller.confirmClipProceedToTranscription();
+
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+      expect(controller.modelSetup.value.status, ModelSetupStatus.insufficientStorage);
+    });
+
+    test('retrying after a failure calls ensureReady again and can succeed', () async {
+      modelProvisioner = FakeSpeechModelProvisioner(startReady: false)
+        ..nextEnsureReadyResult = false
+        ..nextEnsureReadyFinalStatus = ModelSetupStatus.failed;
+      controller = AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+      );
+      await recordAClip();
+      await controller.confirmClipProceedToTranscription();
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+
+      // Fix the simulated condition (e.g. network back) and retry.
+      modelProvisioner.nextEnsureReadyResult = true;
+      await controller.confirmClipProceedToTranscription();
+
+      expect(modelProvisioner.ensureReadyCallCount, 2);
+      expect(controller.step.value, AiIntakeStep.review);
+    });
+
+    test('cancelling mid-download returns to the recording preview and discards the stale result', () async {
+      modelProvisioner = FakeSpeechModelProvisioner(startReady: false)..delay = const Duration(milliseconds: 50);
+      controller = AiIntakeController(
+        recorder: recorder,
+        playback: playback,
+        transcriber: transcriber,
+        imageTextExtractor: imageTextExtractor,
+        textReviewer: NoOpArabicTextReviewer(),
+        actionDetector: actionDetector,
+        actionDraftHandler: draftHandler,
+        permissionGate: permissionGate,
+        imageCapture: imageCapture,
+        speechModelProvisioner: modelProvisioner,
+      );
+      await recordAClip();
+
+      final future = controller.confirmClipProceedToTranscription();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(controller.step.value, AiIntakeStep.preparingModel);
+
+      controller.cancelProcessing();
+      expect(controller.step.value, AiIntakeStep.recordingPreview);
+      expect(modelProvisioner.cancelled, isTrue);
+
+      await future;
+      expect(controller.step.value, AiIntakeStep.recordingPreview,
+          reason: 'a model-ready result that arrives after cancellation must not resurrect the flow');
+      expect(controller.extraction.value, isNull);
+    });
+
+    test('the provisioner is disposed when the controller closes', () {
+      controller.onClose();
+      expect(modelProvisioner.disposed, isTrue);
     });
   });
 }

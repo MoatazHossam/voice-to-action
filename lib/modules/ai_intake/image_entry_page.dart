@@ -70,7 +70,12 @@ class _ImageEntryPageState extends State<ImageEntryPage> {
                 controller: controller,
                 onContinue: () async {
                   await controller.confirmImageProceedToOcr();
-                  if (mounted) Get.toNamed(widget.reviewRouteName);
+                  // Only leave this screen if processing actually reached
+                  // review — a failure or cancellation must keep the user
+                  // on the appropriate error/preview state here instead.
+                  if (mounted && controller.step.value == AiIntakeStep.review) {
+                    Get.toNamed(widget.reviewRouteName);
+                  }
                 },
               ),
             ),

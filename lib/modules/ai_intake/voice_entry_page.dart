@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import 'ai_intake_controller.dart';
 import 'models/ai_intake_step.dart';
+import 'widgets/model_setup_panel.dart';
 import 'widgets/processing_panel.dart';
 import 'widgets/recorder_panel.dart';
 import 'widgets/voice_flow_header.dart';
@@ -30,21 +31,36 @@ class _VoiceEntryPageState extends State<VoiceEntryPage> {
     controller.enterVoiceFlow();
   }
 
+  /// Runs the transcription pipeline (which may first have to prepare the
+  /// on-device speech model) and only leaves this screen if it actually
+  /// reached the review step — a failure, cancellation, or a still-pending
+  /// model download must keep the user on this screen showing the
+  /// appropriate state, never silently jump to an empty review screen.
+  Future<void> _proceedToTranscriptionThenReview() async {
+    await controller.confirmClipProceedToTranscription();
+    if (mounted && controller.step.value == AiIntakeStep.review) {
+      Get.toNamed(widget.reviewRouteName);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       final step = controller.step.value;
-      final active = step == AiIntakeStep.recording || step == AiIntakeStep.transcribing;
+      final active = step == AiIntakeStep.recording ||
+          step == AiIntakeStep.preparingModel ||
+          step == AiIntakeStep.transcribing;
       return PopScope(
-        // Leaving mid-recording or mid-transcription must stop the mic /
-        // discard the stale result, not just silently abandon the screen.
+        // Leaving mid-recording, mid-model-download, or mid-transcription
+        // must stop the mic / cancel the download / discard the stale
+        // result — not just silently abandon the screen.
         canPop: !active,
         onPopInvokedWithResult: (didPop, result) async {
           if (didPop) return;
           final navigator = Navigator.of(context);
           if (step == AiIntakeStep.recording) {
             await controller.cancelRecording();
-          } else if (step == AiIntakeStep.transcribing) {
+          } else if (step == AiIntakeStep.preparingModel || step == AiIntakeStep.transcribing) {
             controller.cancelProcessing();
           }
           navigator.pop();
@@ -74,11 +90,10 @@ class _VoiceEntryPageState extends State<VoiceEntryPage> {
       case AiIntakeStep.recordingPreview:
         return RecordingPreviewView(
           controller: controller,
-          onContinue: () async {
-            await controller.confirmClipProceedToTranscription();
-            if (mounted) Get.toNamed(widget.reviewRouteName);
-          },
+          onContinue: _proceedToTranscriptionThenReview,
         );
+      case AiIntakeStep.preparingModel:
+        return ModelSetupView(controller: controller, onRetry: _proceedToTranscriptionThenReview);
       case AiIntakeStep.transcribing:
         return ProcessingView(controller: controller);
       case AiIntakeStep.failure:

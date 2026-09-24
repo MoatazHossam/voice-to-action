@@ -11,11 +11,13 @@ import 'contracts/audio_recorder.dart';
 import 'contracts/image_capture.dart';
 import 'contracts/image_text_extractor.dart';
 import 'contracts/permission_gate.dart';
+import 'contracts/speech_model_provisioner.dart';
 import 'contracts/speech_transcriber.dart';
 import 'models/action_suggestion.dart';
 import 'models/ai_action_draft.dart';
 import 'models/ai_intake_input.dart';
 import 'models/ai_intake_step.dart';
+import 'models/model_setup_progress.dart';
 import 'models/text_correction.dart';
 import 'models/text_extraction.dart';
 
@@ -35,6 +37,7 @@ class AiIntakeController extends GetxController {
     required ActionDraftHandler actionDraftHandler,
     required PermissionGate permissionGate,
     required ImageCapture imageCapture,
+    required SpeechModelProvisioner speechModelProvisioner,
   })  : _recorder = recorder,
         _playback = playback,
         _transcriber = transcriber,
@@ -43,7 +46,11 @@ class AiIntakeController extends GetxController {
         _actionDetector = actionDetector,
         _actionDraftHandler = actionDraftHandler,
         _permissionGate = permissionGate,
-        _imageCapture = imageCapture;
+        _imageCapture = imageCapture,
+        _speechModelProvisioner = speechModelProvisioner {
+    modelSetup.value = _speechModelProvisioner.currentProgress;
+    _modelSetupSub = _speechModelProvisioner.progressStream.listen((p) => modelSetup.value = p);
+  }
 
   final AudioRecorder _recorder;
   final AudioPlayback _playback;
@@ -54,6 +61,13 @@ class AiIntakeController extends GetxController {
   final ActionDraftHandler _actionDraftHandler;
   final PermissionGate _permissionGate;
   final ImageCapture _imageCapture;
+  final SpeechModelProvisioner _speechModelProvisioner;
+  StreamSubscription<ModelSetupProgress>? _modelSetupSub;
+
+  /// Progress of the one-time (per install), app-managed Arabic
+  /// speech-model download — see `SpeechModelProvisioner`. Rendered by
+  /// `ModelSetupView` while `step == AiIntakeStep.preparingModel`.
+  final Rx<ModelSetupProgress> modelSetup = ModelSetupProgress.notStartedValue.obs;
 
   StreamSubscription<double>? _amplitudeSub;
   StreamSubscription<Duration>? _elapsedSub;
@@ -179,10 +193,26 @@ class AiIntakeController extends GetxController {
     step.value = AiIntakeStep.voiceIdle;
   }
 
+  /// Fully re-entrant/idempotent: safe to call again as a "retry" after a
+  /// failed model download or a failed transcription — it re-checks
+  /// everything fresh rather than assuming prior state.
   Future<void> confirmClipProceedToTranscription() async {
     final input = _capturedInput;
     if (input == null) return;
     final generation = _generation;
+
+    if (!_speechModelProvisioner.currentProgress.isReady) {
+      step.value = AiIntakeStep.preparingModel;
+      final ready = await _speechModelProvisioner.ensureReady();
+      if (generation != _generation) return; // cancelled, or superseded by a new session
+      // Reconcile directly rather than trusting the progress *stream* to
+      // have already delivered this value — `currentProgress` is updated
+      // synchronously by the provisioner and is the actual source of truth.
+      modelSetup.value = _speechModelProvisioner.currentProgress;
+      if (!ready) return; // modelSetup now reflects which retry/offline/storage state to show
+    }
+    if (generation != _generation) return;
+
     step.value = AiIntakeStep.transcribing;
     isProcessing.value = true;
     processingProgress.value = null;
@@ -193,7 +223,7 @@ class AiIntakeController extends GetxController {
           if (generation == _generation) processingProgress.value = p;
         },
       );
-      if (generation != _generation) return; // cancelled, or superseded by a new session
+      if (generation != _generation) return;
       _applyExtraction(result);
     } catch (e) {
       if (generation != _generation) return;
@@ -211,6 +241,12 @@ class AiIntakeController extends GetxController {
   /// in the background — this is a best-effort cancellation, not a native
   /// interrupt, and is documented as such in ARCHITECTURE.md.
   void cancelProcessing() {
+    if (step.value == AiIntakeStep.preparingModel) {
+      _generation++;
+      _speechModelProvisioner.cancel();
+      step.value = AiIntakeStep.recordingPreview;
+      return;
+    }
     if (!isProcessing.value) return;
     _generation++;
     isProcessing.value = false;
@@ -385,11 +421,13 @@ class AiIntakeController extends GetxController {
     _generation++;
     _amplitudeSub?.cancel();
     _elapsedSub?.cancel();
+    _modelSetupSub?.cancel();
     _deleteFileIfExists(recordedPath.value);
     _recorder.dispose();
     _playback.dispose();
     _transcriber.dispose();
     _imageTextExtractor.dispose();
+    _speechModelProvisioner.dispose();
     super.onClose();
   }
 }
